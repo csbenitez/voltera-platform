@@ -5,6 +5,7 @@ namespace: voltera
 resources:
   - ../base
   - mesh-bridge.yaml
+  - injector-dashboard.yaml
 configMapGenerator:
   - name: voltera-config
     behavior: merge

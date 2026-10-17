@@ -1,0 +1,38 @@
+# Dashboard de carga (index.html) para probar el Event Mesh. Acceso: scripts/lab.ps1 dashboard
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: injector-dashboard
+  labels: {app: injector-dashboard}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: injector-dashboard}
+  template:
+    metadata:
+      labels: {app: injector-dashboard}
+    spec:
+      containers:
+        - name: injector
+          image: voltera-eda
+          imagePullPolicy: IfNotPresent
+          command: ["/svc/injector", "-serve"]
+          envFrom:
+            - configMapRef: {name: voltera-config}
+          ports:
+            - {containerPort: 8080, name: http}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: injector-dashboard
+spec:
+  selector: {app: injector-dashboard}
+  ports:
+    - {name: http, port: 80, targetPort: http}

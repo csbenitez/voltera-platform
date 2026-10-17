@@ -43,6 +43,18 @@ kubectl --context k3d-voltera-onprem -n voltera get pods -w    # en otra termina
 | 4 | Emparejamiento | Logs de `matching-engine`: `EnergyMatched origin=onprem processed_by=onprem`. Logs de `energy-transfer`: `SWITCH_CMD` |
 | 5 | Consolidación global | `lab.ps1 status`: Facturación con `by_route.onprem->onprem > 0`. El mesh muestra `billing_routed_onprem` |
 
+### Dashboard de carga
+
+```powershell
+.\scripts\lab.ps1 dashboard      # port-forward a onprem y abre http://localhost:8090
+```
+
+El injector también corre como Deployment `injector-dashboard` (`injector -serve`) con un `index.html` para
+lanzar y detener cargas contra el Event Mesh: `constante`, `rampa`, `rafaga` (escalado KEDA), `cruce-knative`
+(medidores foráneos onprem → Knative → nube) y `soak`. Muestra enviados, errores, msg/s reales, latencia de
+publish, trace ids (para `lab.ps1 trace`) e historial. El failover sigue en `lab.ps1 failover-test`.
+Corre una carga a la vez; el Job `lab.ps1 inject` no cambia.
+
 Repite con `-Target cloud` para la región 2. Facturación consolida `cloud->cloud` y `onprem->onprem` sin
 duplicados (`duplicates: 0`).
 

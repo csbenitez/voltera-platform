@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CLI del lab EDA de Voltera (equivalente POSIX de scripts/lab.ps1).
 #   ./scripts/lab.sh <comando> [onprem|cloud|all] [opciones]
-# Comandos: cleanup | addons | build | secrets | deploy | up | inject | status |
+# Comandos: cleanup | addons | build | secrets | deploy | up | inject | dashboard | status |
 #           failover-test | knative-test | knative-kql | trace | logs | aks <start|stop|status> | down
 # Opciones por variables de entorno: KNATIVE=1 (addons) FOREIGN=0.2 (inject) N=100 RATE=50 TAG=... TRACE_ID=... SERVICE=matching-engine FORCE=1
 set -euo pipefail
@@ -255,6 +255,10 @@ case "$CMD" in
   deploy) deploy ;;
   up) build; secrets; deploy ;;
   inject) inject ;;
+  dashboard)
+    k onprem -n "$NS" rollout status deploy/injector-dashboard --timeout=120s
+    step "Dashboard del injector -> http://localhost:8090 (Ctrl+C para cerrar)"
+    k onprem -n "$NS" port-forward svc/injector-dashboard 8090:80 ;;
   status) status ;;
   failover-test) failover_test ;;
   knative-test) knative_test ;;

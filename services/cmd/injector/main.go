@@ -1,20 +1,19 @@
-// injector: inyección sintética de N declaraciones (medidores AMI) en la Cola de
+// injector: inyección sintética de declaraciones (medidores AMI) en la Cola de
 // Declaración. Cada mensaje inicia una traza raíz; se imprimen los trace_id para
 // buscarlos en Application Insights.
 //
-//	injector -n 200 -rate 50 -meters 40
+// Dos modos:
+//
+//	injector -n 200 -rate 50 -meters 40        # CLI de un solo disparo (Job)
+//	injector -serve                            # dashboard (index.html) con escenarios de carga
 package main
 
 import (
 	"context"
 	"flag"
 	"fmt"
-	"math/rand/v2"
 	"time"
 
-	"go.opentelemetry.io/otel/trace"
-
-	"github.com/csbenitez/voltera-eda/internal/domain"
 	"github.com/csbenitez/voltera-eda/internal/platform"
 )
 
@@ -23,6 +22,7 @@ func main() {
 	rate := flag.Int("rate", platform.EnvInt("INJECT_RATE", 50), "mensajes por segundo")
 	meters := flag.Int("meters", platform.EnvInt("INJECT_METERS", 40), "medidores distintos")
 	foreign := flag.Float64("foreign", 0, "fracción (0..1) de medidores que pertenecen a la otra región (caso de uso Knative)")
+	serve := flag.Bool("serve", platform.Env("INJECT_SERVE", "") == "1", "levanta el dashboard HTTP en vez de inyectar una vez")
 	flag.Parse()
 
 	platform.Run("injector", func(ctx context.Context) error {
@@ -32,41 +32,25 @@ func main() {
 		}
 		defer cl.Close()
 
-		region := platform.Region()
-		interval := time.Second / time.Duration(max(1, *rate))
-		start := time.Now()
-		var traces []string
-		for i := 0; i < *n && ctx.Err() == nil; i++ {
-			kind := domain.Surplus
-			if i%2 == 1 {
-				kind = domain.Deficit
-			}
-			home := region
-			if rand.Float64() < *foreign {
-				home = domain.OtherRegion(region)
-			}
-			d := domain.Declaration{
-				MeterID:    fmt.Sprintf("AMI-%s-%04d", home, rand.IntN(*meters)+1),
-				Kind:       kind,
-				KWh:        domain.Round(0.5+rand.Float64()*4.5, 3),
-				MeasuredAt: time.Now().UTC(),
-			}
-			ev, _ := platform.NewEvent(domain.TypeDeclaration, "//"+region+"/ami-injector", d)
-			sctx, span := platform.Tracer().Start(ctx, "inject declaration", trace.WithSpanKind(trace.SpanKindInternal))
-			if err := platform.Publish(sctx, cl, domain.TopicIngress, d.MeterID, ev); err != nil {
-				span.End()
-				return err
-			}
-			if len(traces) < 5 {
-				traces = append(traces, span.SpanContext().TraceID().String())
-			}
-			span.End()
-			time.Sleep(interval)
+		if *serve {
+			return serveDashboard(ctx, cl)
 		}
-		fmt.Printf("\nInyectadas %d declaraciones en %s (region=%s)\n", *n, time.Since(start).Truncate(time.Millisecond), region)
+
+		p := Params{Scenario: ScConstant, N: *n, Rate: *rate, Meters: *meters, Foreign: *foreign}
+		if err := p.normalize(); err != nil {
+			return err
+		}
+		st := &Stats{}
+		run(ctx, cl, p, st)
+		s := st.snapshot()
+		fmt.Printf("\nInyectadas %d declaraciones en %s (region=%s, errores=%d)\n",
+			s.Sent, time.Duration(s.ElapsedSec*float64(time.Second)).Truncate(time.Millisecond), platform.Region(), s.Errors)
 		fmt.Println("Trace IDs de ejemplo (App Insights -> Transaction search / operation_Id):")
-		for _, t := range traces {
+		for _, t := range s.Traces {
 			fmt.Println("  ", t)
+		}
+		if s.State == "error" {
+			return fmt.Errorf("ninguna declaración publicada: %s", s.LastError)
 		}
 		return nil
 	})

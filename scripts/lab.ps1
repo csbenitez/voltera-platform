@@ -14,6 +14,7 @@
       deploy         Aplica deploy/<onprem|cloud> (kustomize) con el tag construido.
       up             build + secrets + deploy.
       inject         Lanza el Job injector con -N declaraciones a -Rate msg/s.
+      dashboard      Abre el dashboard de carga del injector (port-forward a onprem, http://localhost:8090).
       status         Pods, KEDA, lag de Redpanda, estado del Event Mesh y facturación.
       knative-test   Inyecta declaraciones de medidores ajenos (-Foreign) y verifica el cruce onprem -> nube por Knative.
       knative-kql    Imprime las consultas KQL para ver el canal Knative en Application Insights.
@@ -31,7 +32,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("cleanup", "addons", "build", "secrets", "deploy", "up", "inject", "status",
+    [ValidateSet("cleanup", "addons", "build", "secrets", "deploy", "up", "inject", "dashboard", "status",
         "failover-test", "knative-test", "knative-kql", "trace", "logs", "aks", "down", "help")]
     [string]$Command = "help",
 
@@ -290,6 +291,14 @@ function Invoke-Inject {
     }
 }
 
+function Invoke-Dashboard {
+    $port = 8090
+    K onprem -n $Ns rollout status deploy/injector-dashboard --timeout=120s | Out-Host
+    Step "Dashboard del injector -> http://localhost:$port (Ctrl+C para cerrar)"
+    Start-Process "http://localhost:$port"
+    K onprem -n $Ns port-forward svc/injector-dashboard "${port}:80"
+}
+
 function Show-Status {
     foreach ($t in Targets) {
         Step "Región $t ($($Ctx[$t]))"
@@ -487,6 +496,7 @@ switch ($Command) {
     "deploy" { Invoke-Deploy }
     "up" { Invoke-Build; Invoke-Secrets; Invoke-Deploy }
     "inject" { Invoke-Inject }
+    "dashboard" { Invoke-Dashboard }
     "status" { Show-Status }
     "failover-test" { Invoke-FailoverTest }
     "knative-test" { Invoke-KnativeTest; if ($script:ExitCode) { exit $script:ExitCode } }
