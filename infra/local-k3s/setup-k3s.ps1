@@ -83,6 +83,6 @@ Write-Host "[4/4] Cambiando contexto de kubectl a 'k3d-$ClusterName'..." -Foregr
 
 Write-Host "`n==========================================================" -ForegroundColor Green
 Write-Host "  ¡Clúster On-Premise K3s listo y activo!                " -ForegroundColor Green
-Write-Host "  Siguiente paso: instalar la capa de Add-ons (Istio + Knative):" -ForegroundColor Cyan
-Write-Host "    pwsh $PSScriptRoot\..\addons\install.ps1 -PublicIp 127.0.0.1" -ForegroundColor White
+Write-Host "  Siguiente paso: instalar la capa de Add-ons (KEDA):" -ForegroundColor Cyan
+Write-Host "    pwsh $PSScriptRoot\..\addons\install.ps1 -Target local" -ForegroundColor White
 Write-Host "==========================================================" -ForegroundColor Green

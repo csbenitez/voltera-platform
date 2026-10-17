@@ -1,0 +1,40 @@
+# Borde del Event Mesh: Istio ingress (IP pública + DNS voltera-dev-mesh) con TLS
+# de Let's Encrypt. Solo /mesh/* llega al mesh-router; la autenticación de la
+# región se valida con X-Mesh-Token en el router.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: mesh-edge-gateway
+spec:
+  selector:
+    istio: ingress
+  servers:
+    - port: {number: 80, name: http, protocol: HTTP}
+      hosts: ["*"]
+    - port: {number: 443, name: https, protocol: HTTPS}
+      tls:
+        mode: SIMPLE
+        credentialName: voltera-ingress-cert
+      hosts: ["*"]
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: mesh-edge
+spec:
+  hosts: ["*"]
+  gateways: [mesh-edge-gateway]
+  http:
+    - match:
+        - uri: {prefix: /.well-known/acme-challenge/}
+      route:
+        - destination:
+            host: cert-manager-solver.istio-system.svc.cluster.local
+            port: {number: 8089}
+    - match:
+        - uri: {prefix: /mesh/}
+      route:
+        - destination:
+            host: mesh-router.voltera.svc.cluster.local
+            port: {number: 80}
+      timeout: 15s

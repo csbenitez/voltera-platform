@@ -16,14 +16,14 @@ show_help() {
   echo "🎯 Entornos (Target):"
   echo "  local       Gestiona el clúster local K3s (k3d en Docker Desktop)"
   echo "  azure       Gestiona el clúster Azure AKS, Terraform y FinOps"
-  echo "  addons      Gestiona el stack de addons (Istio, Knative, KEDA)"
+  echo "  addons      Gestiona el stack de addons (local: KEDA; azure: Istio edge + cert-manager + KEDA)"
   echo ""
   echo "⚡ Acciones para 'local':"
   echo "  start       Inicia clúster k3d"
   echo "  stop        Pausa clúster k3d (k3d cluster stop voltera-onprem)"
   echo "  delete      Elimina clúster k3d (k3d cluster delete voltera-onprem)"
   echo "  status      Muestra clústeres k3d y estado kubectl"
-  echo "  addons      Instala Istio, Knative y KEDA localmente"
+  echo "  addons      Instala KEDA en el clúster local"
   echo ""
   echo "⚡ Acciones para 'azure':"
   echo "  status      Consulta el PowerState de AKS"
@@ -32,7 +32,7 @@ show_help() {
   echo "  connect     Descarga credenciales a kubectl"
   echo "  plan        Ejecuta terraform plan en environments/dev"
   echo "  apply       Ejecuta terraform apply en environments/dev"
-  echo "  addons      Instala Istio, Knative y KEDA en Azure AKS"
+  echo "  addons      Instala Istio edge, cert-manager y KEDA en AKS"
   echo ""
   echo "💡 Ejemplos:"
   echo "  ./infra/manage.sh local start"
@@ -79,8 +79,7 @@ case "$TARGET" in
         kubectl cluster-info
         ;;
       addons)
-        IP="${PUBLIC_IP:-127.0.0.1}"
-        "$SCRIPT_DIR/addons/install.sh" --target local --public-ip "$IP"
+        "$SCRIPT_DIR/addons/install.sh" --target local
         ;;
       *)
         echo "Acción no reconocida '$ACTION' para target local."
@@ -113,7 +112,7 @@ case "$TARGET" in
         (cd "$SCRIPT_DIR/azure-terraform/environments/dev" && terraform apply)
         ;;
       addons)
-        "$SCRIPT_DIR/addons/install.sh" --target azure --public-ip "$PUBLIC_IP"
+        "$SCRIPT_DIR/addons/install.sh" --target azure
         ;;
       *)
         echo "Acción no reconocida '$ACTION' para target azure."
@@ -122,7 +121,7 @@ case "$TARGET" in
     ;;
 
   addons)
-    "$SCRIPT_DIR/addons/install.sh" --target "$ACTION" --public-ip "$PUBLIC_IP"
+    "$SCRIPT_DIR/addons/install.sh" --target "$ACTION"
     ;;
 
   help|*)

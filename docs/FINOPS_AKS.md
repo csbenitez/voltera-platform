@@ -16,6 +16,16 @@ En entornos de pruebas y desarrollo, los clústeres de Kubernetes suelen permane
 | **Almacenamiento (Discos OS / PVCs)** | Costo estándar por GB (~\$5-10 USD) | Costo estándar por GB (~\$5-10 USD) | Preservado intacto |
 | **IP Pública / VNet** | Tarifa fija menor (~\$3-4 USD) | Tarifa fija menor (~\$3-4 USD) | Preservado intacto |
 
+### Recursos del lab EDA (estado actual)
+| Recurso | Costo aprox. | Decisión |
+|---|---|---|
+| AKS 1× B4ms | ~4.2 USD/día encendido | Apagado automático a las 20:00 COT y manual con `scripts/lab.ps1 aks -Action stop` |
+| ACR Basic | ~5 USD/mes | Necesario para la imagen `voltera-eda` (pull con AcrPull, sin credenciales) |
+| Log Analytics + App Insights | Por GB (cap 0.5 GB/día) | Trazas del lab. Heartbeats y health checks no generan spans |
+| ~~APIM Consumption~~, ~~Event Grid~~ | — | **Eliminados**: no están en ARCH; el mesh es el `mesh-router` |
+| Redpanda | $0 extra | `emptyDir` (sin discos administrados), retención de 1 h |
+| Knative, Kiali, Grafana, Prometheus | $0 extra | Retirados del cluster: liberan unos 1.5 GB de RAM en el nodo |
+
 > [!NOTE]
 > Al ejecutar `az aks stop`, el estado de los pods, servicios, deployments, volúmenes persistentes (PVCs) y configuraciones de red **NO se destruyen ni se pierden**. Simplemente se detienen los nodos de cómputo. Al iniciar (`start`), el clúster despierta exactamente en el mismo estado en ~2 a 3 minutos.
 
@@ -144,3 +154,7 @@ az automation runbook start \
    - Jornada de desarrollo típica: 8 horas/día de lunes a viernes = **40 horas/semana**.
    - Horas totales de una semana: **168 horas**.
    - Horas en estado `Stopped`: **128 horas/semana (76.2% de ahorro en la factura de cómputo)**.
+
+> [!IMPORTANT]
+> Redpanda usa `emptyDir`: después de `az aks start` los topics quedan vacíos o no existen. Ejecuta
+> `.\scripts\lab.ps1 deploy -Target cloud`, que recrea el Job de topics y reinicia los consumidores.

@@ -1,0 +1,23 @@
+# Inyección sintética: N declaraciones de medidores AMI en la Cola de Declaración.
+# Uso: scripts/lab.ps1 inject -Target onprem -N 200   (sustituye __N__/__RATE__/__IMAGE__)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: injector-__STAMP__
+  namespace: voltera
+  labels: {app: injector}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 1800
+  template:
+    metadata:
+      labels: {app: injector}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: injector
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: ["/svc/injector", "-n", "__N__", "-rate", "__RATE__"]
+          envFrom:
+            - configMapRef: {name: voltera-config}

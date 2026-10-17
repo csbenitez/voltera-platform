@@ -1,0 +1,19 @@
+# Región 1 (on-prem simulado en k3d). Imagen importada con `k3d image import`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: voltera
+resources:
+  - ../base
+  - mesh-bridge.yaml
+configMapGenerator:
+  - name: voltera-config
+    behavior: merge
+    literals:
+      - REGION=onprem
+      - MESH_URL=https://voltera-dev-mesh.eastus2.cloudapp.azure.com/mesh/events
+images:
+  - name: voltera-eda
+    newName: voltera/voltera-eda
+    newTag: __TAG__
+generatorOptions:
+  disableNameSuffixHash: true   # el Job del injector referencia voltera-config por nombre

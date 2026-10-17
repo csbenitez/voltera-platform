@@ -23,7 +23,7 @@ variable "prefix" {
 }
 
 variable "node_vm_size" {
-  description = "Tamaño de VM para AKS (Standard_B4ms tiene 4 vCPU y 16GB RAM, ideal para aguantar Istio + Knative Serving y Eventing)"
+  description = "Tamaño de VM para AKS (Standard_B4ms tiene 4 vCPU y 16GB RAM, suficiente para Istio edge + KEDA + Redpanda + mocks)"
   type        = string
   default     = "Standard_B4ms"
 }

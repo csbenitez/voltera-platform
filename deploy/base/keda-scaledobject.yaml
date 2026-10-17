@@ -1,0 +1,22 @@
+# Autoescalado 0..N del declaration-gateway según el lag del grupo en la cola de declaración.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: declaration-gateway
+spec:
+  scaleTargetRef:
+    name: declaration-gateway
+  minReplicaCount: 0
+  maxReplicaCount: 5
+  pollingInterval: 5
+  cooldownPeriod: 45
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: redpanda.voltera.svc.cluster.local:9092
+        consumerGroup: declaration-gateway
+        topic: voltera.ingress.declarations
+        lagThreshold: "20"
+        activationLagThreshold: "0"
+        offsetResetPolicy: earliest
+        allowIdleConsumers: "false"

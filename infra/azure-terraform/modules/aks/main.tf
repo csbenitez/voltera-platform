@@ -8,17 +8,17 @@ resource "azurerm_kubernetes_cluster" "aks" {
   sku_tier = "Free"
 
   default_node_pool {
-    name                = "system"
-    node_count          = var.node_count
-    vm_size             = var.node_vm_size
-    vnet_subnet_id      = var.subnet_id
-    os_disk_size_gb     = var.os_disk_size_gb
-    os_disk_type        = "Managed"
-    os_sku              = "Ubuntu"
-    type                = "VirtualMachineScaleSets"
-    auto_scaling_enabled = var.enable_auto_scaling
-    min_count            = var.enable_auto_scaling ? var.min_count : null
-    max_count            = var.enable_auto_scaling ? var.max_count : null
+    name                        = "system"
+    node_count                  = var.node_count
+    vm_size                     = var.node_vm_size
+    vnet_subnet_id              = var.subnet_id
+    os_disk_size_gb             = var.os_disk_size_gb
+    os_disk_type                = "Managed"
+    os_sku                      = "Ubuntu"
+    type                        = "VirtualMachineScaleSets"
+    auto_scaling_enabled        = var.enable_auto_scaling
+    min_count                   = var.enable_auto_scaling ? var.min_count : null
+    max_count                   = var.enable_auto_scaling ? var.max_count : null
     max_pods                    = var.max_pods
     temporary_name_for_rotation = "temppool"
     tags                        = var.tags

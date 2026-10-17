@@ -1,222 +1,104 @@
-# Arquitectura y Guía Operativa del Event Mesh (Voltera)
+# Event Mesh del lab EDA
 
-Este documento detalla la arquitectura, el flujo de datos, los contratos de eventos y las instrucciones operativas del **Event Mesh Híbrido** implementado para la plataforma **Voltera** (Energytech, UniAndes ARTI4208).
+El Event Mesh es la capa que interconecta las dos regiones (on-prem en k3d y nube en AKS). Está
+implementado por dos componentes en `services/cmd/`:
 
----
+| Componente | Región | Responsabilidad |
+|---|---|---|
+| `mesh-bridge` | on-prem | Conector de ingesta: consume del Redpanda local y reenvía al mesh por HTTPS. |
+| `mesh-router` | nube | Router central: autenticación, observabilidad, deduplicación, enrutamiento a Facturación y failover. |
 
-## 1. Visión General del Event Mesh
-
-El **Event Mesh** es la capa de transporte y enrutamiento desacoplada y orientada a eventos (*EDA - Event-Driven Architecture*) que conecta dos planos de ejecución:
-1. **Edge / On-Premise (Subestaciones y Medidores Inteligentes AMI)**: Emula la infraestructura física de medición avanzada regulada bajo la **Resolución CREG 101-001 de 2022**.
-2. **Cloud Core (Azure Kubernetes Service - AKS)**: Aloja el núcleo transaccional de Voltera (Facturación, Netting CREG 101-072 / 174, Comunidades Energéticas P2P y Pasarela de Pagos).
-
-El estándar de interoperabilidad adoptado en todo el bus es **[CloudEvents v1.0 (CNCF)](https://cloudevents.io/)**, transmitido en **Binary HTTP Mode**.
+## 1. Conectividad y autenticación
 
 ```
-┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   ARQUITECTURA DEL EVENT MESH HÍBRIDO                                  │
-└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-
-    [ REGIÓN EDGE / ON-PREMISE ]                                  [ REGIÓN CLOUD: AZURE AKS ]
- ┌─────────────────────────────────┐                             ┌──────────────────────────────────────────────┐
- │ • Medidores AMI Inteligentes    │                             │                                              │
- │ • Generador de Carga k6         │                             │               Azure AKS Cluster              │
- │   (tests/01_smoke_test.js)      │                             │                                              │
- │ • Mock AMI Service (Go)         │                             │  ┌────────────────────────────────────────┐  │
- └────────────────┬────────────────┘                             │  │         Istio Ingress Gateway          │  │
-                  │ CloudEvents v1.0                             │  │  (VirtualService: /events -> rewrite)  │  │
-                  │ (HTTP Binary Mode)                           │  └───────────────────┬────────────────────┘  │
-                  ▼                                              │                      │                       │
- ┌─────────────────────────────────┐                             │                      ▼                       │
- │      Knative OnPrem Broker      │                             │  ┌────────────────────────────────────────┐  │
- │      (namespace: voltera-onprem)│                             │  │     Knative Cloud Broker               │  │
- └────────────────┬────────────────┘                             │  │     (cloud-broker / ns: voltera)       │  │
-                  │                                              │  └───────┬──────────────┬──────────────┬──┘  │
-                  │ Knative Trigger                              │          │              │              │     │
-                  │ (trigger-forward-ami-to-cloud)               │          │ Filter Type  │ Filter Type  │     │
-                  ▼                                              │          ▼              ▼              ▼     │
-      [ Internet / APIM Gateway ] ───────────────────────────────┼──────────┘              │              │     │
-            http://<Ingress-IP>/events                           │                         │              │     │
-                                                                 │                         ▼              │     │
-                                                                 │ ┌──────────────────────────────┐       │     │
-                                                                 │ │ Trigger: trigger-billing-ami │       │     │
-                                                                 │ │ -> Subscriber: billing-svc   │       │     │
-                                                                 │ └──────────────────────────────┘       │     │
-                                                                 │                                        │     │
-                                                                 │ ┌──────────────────────────────┐       │     │
-                                                                 │ │ Trigger: trigger-logger-ami  │       │     │
-                                                                 │ │ -> Subscriber: logger (aud.) │       │     │
-                                                                 │ └──────────────────────────────┘       │     │
-                                                                 │                                        ▼     │
-                                                                 │ ┌──────────────────────────────────────────┐ │
-                                                                 │ │ Trigger: trigger-payment-invoice         │ │
-                                                                 │ │ -> Subscriber: payment-svc (/events)     │ │
-                                                                 │ └──────────────────────────────────────────┘ │
-                                                                 └──────────────────────────────────────────────┘
+k3d (detrás de NAT) --HTTPS--> voltera-dev-mesh.eastus2.cloudapp.azure.com (Istio ingress, LB público)
+                               /mesh/events --> mesh-router.voltera:80
 ```
 
----
+* Solo hay tráfico **saliente** desde on-prem: el bridge empuja, la nube nunca llama a k3d.
+* **TLS**: certificado Let's Encrypt (`deploy/cloud-edge`, cert-manager HTTP-01) en el Istio ingress.
+* **Autenticación de región**: header `X-Mesh-Token` (Secret `mesh-token`, mismo valor en ambos
+  clusters, generado por `lab.ps1 secrets`). Comparación en tiempo constante; 401 si no coincide.
+* Solo `/mesh/*` se publica. `/status` del router es interno (se consulta vía proxy del API server).
+* Istio actúa **solo como edge** (sin sidecars en `voltera`), lo que ahorra recursos y evita conflictos con
+  KEDA scale-to-zero y Jobs.
 
-## 2. Catálogo y Especificación de CloudEvents
+## 2. Formato
 
-### 2.1 Evento de Telemetría: `com.voltera.ami.lectura_registrada`
-* **Dominio**: Telemetría e Ingesta de Medición (AMI).
-* **Productor**: Agentes Edge / Inversores / Mocks AMI (`mock-onprem`).
-* **Consumidores**: 
-  - `billing-service`: Para procesar balance energético y liquidación.
-  - `cloud-event-logger`: Para auditoría y observabilidad en tiempo real.
-* **Encabezados HTTP (CloudEvents Binary Mode)**:
-  ```http
-  Ce-Specversion: 1.0
-  Ce-Type: com.voltera.ami.lectura_registrada
-  Ce-Source: //onprem/medidores/ami-mock
-  Ce-Id: evt-ami-1718000000000
-  Ce-Time: 2026-10-12T20:00:00Z
-  Content-Type: application/json
-  ```
-* **Payload de Ejemplo**:
-  ```json
-  {
-    "niu": "1002345",
-    "medidor_serie": "MTR-COL-8492",
-    "timestamp_lectura": "2026-10-12T20:00:00Z",
-    "intervalo": "MINUTOS_15",
-    "kwh_importados": 14.25,
-    "kwh_exportados": 3.80,
-    "tension_voltios": 121.4
-  }
-  ```
+CloudEvents 1.0 en **modo binario**:
 
----
+| Transporte | Atributos | Traza |
+|---|---|---|
+| Kafka | `ce_id`, `ce_type`, `ce_source`, `ce_time`, `ce_region` | header `traceparent` |
+| HTTP | `Ce-Id`, `Ce-Type`, `Ce-Source`, `Ce-Time`, `Ce-Region` | header `traceparent` |
 
-### 2.2 Evento Transaccional: `com.voltera.billing.factura_generada`
-* **Dominio**: Facturación y Liquidación Netting (Billing).
-* **Productor**: `billing-service`.
-* **Consumidor**: `payment-service` (Pasarela de pagos y dispersión de recaudos).
-* **Encabezados HTTP**:
-  ```http
-  Ce-Specversion: 1.0
-  Ce-Type: com.voltera.billing.factura_generada
-  Ce-Source: //cloud/billing/engine
-  Ce-Id: evt-inv-98213840
-  Ce-Time: 2026-10-12T20:01:00Z
-  Content-Type: application/json
-  ```
-* **Payload de Ejemplo**:
-  ```json
-  {
-    "invoice_id": "INV-2026-004812",
-    "niu": "1002345",
-    "periodo": "2026-10",
-    "total_cop": 145800.0,
-    "kwh_netos": 10.45,
-    "credito_exc1_kwh": 3.80,
-    "status": "ISSUED"
-  }
-  ```
+`ce_region` indica la **región de origen del hecho de negocio**. Se conserva aunque otro cluster procese
+el evento. El payload `EnergyMatched` lleva además `origin_region` y `processed_by`.
 
----
+## 3. Enrutamiento
 
-## 3. Componentes y Manifiestos en Kubernetes
+| Entrada | Origen | Acción |
+|---|---|---|
+| `EnergyMatched` vía HTTP | on-prem (bridge) | dedup → `voltera.mesh.billing.v1` |
+| `EnergyMatched` vía Kafka (`voltera.energy.matched.v1` de AKS) | nube, incluidos los calces hechos en failover | dedup → `voltera.mesh.billing.v1` |
+| `heartbeat` | on-prem | actualiza la salud de la región; si estaba en failover, vuelve a `NORMAL` |
+| `PositionDeclared` / `Precio kWh` | on-prem | se guardan en un buffer de 60 s (`REPLAY_WINDOW`); en `FAILOVER_ACTIVE` se reenvían a `voltera.mesh.failover.positions.v1` |
 
-Los manifiestos del mesh en la nube residen en `k8s/knative-event-mesh.yaml`.
+* **Deduplicación**: `SETNX mesh:seen:<ce-id>` en Redis con TTL de 24 h. Si la publicación falla, se
+  libera la clave y se responde 503, y el bridge reintenta (at-least-once).
+* **Facturación** valida el esquema (`total == kwh * precio`), deduplica por `match_id` y expone `/stats`
+  (incluye `by_route`: `onprem->onprem`, `onprem->cloud`, `cloud->cloud`) y `/invoices`.
 
-| Recurso Kubernetes | Nombre | Namespace | Función Principal |
-|---|---|---|---|
-| **Broker** | `cloud-broker` | `voltera` | Bus multi-canal que recibe y desacopla todos los eventos en la nube. |
-| **Gateway (Istio)** | `cloud-eventmesh-gateway` | `voltera` | Expone los puertos 80 (HTTP) y 443 (HTTPS con TLS 1.3 `voltera-ingress-cert`) del Ingress LoadBalancer. |
-| **VirtualService (Istio)** | `cloud-broker-ingress` | `voltera` | Enruta peticiones a `/events` hacia `broker-ingress.knative-eventing.svc.cluster.local/voltera/cloud-broker`. |
-| **Trigger** | `trigger-billing-ami` | `voltera` | Filtra `com.voltera.ami.lectura_registrada` y entrega al servicio `billing-service:8080/events`. |
-| **Trigger** | `trigger-logger-ami` | `voltera` | Filtra `com.voltera.ami.lectura_registrada` y entrega al pod `cloud-event-logger`. |
-| **Trigger** | `trigger-payment-invoice` | `voltera` | Filtra `com.voltera.billing.factura_generada` y entrega al servicio `payment-service:8081/events`. |
-| **Deployment / Svc** | `cloud-event-logger` | `voltera` | Pod basado en `knative.dev/eventing/cmd/event_display` para inspeccionar el flujo de eventos. |
+## 4. Máquina de estados del failover
 
----
+```mermaid
+stateDiagram-v2
+  [*] --> NORMAL
+  NORMAL --> FAILOVER_ACTIVE: sin heartbeat onprem > FAILOVER_AFTER (15s)<br/>replay de precio + posiciones con ce_time > last_position_at
+  FAILOVER_ACTIVE --> NORMAL: llega un heartbeat onprem
+```
 
-## 4. Guía Operativa: Cómo Probar el Event Mesh
+1. El `matching-engine` publica un heartbeat cada 5 s con `last_position_at`, que es el `ce_time` de la
+   última posición procesada. Los heartbeats no generan spans.
+2. El watchdog del router evalúa la salud cada segundo. Si nunca vio la región, cuenta desde su propio
+   arranque (periodo de gracia).
+3. Al entrar en `FAILOVER_ACTIVE`, el router hace replay del último precio on-prem y de las posiciones
+   on-prem posteriores a `last_position_at`. A partir de ahí reenvía en vivo cada posición y precio
+   on-prem al `matching-engine` de la nube.
+4. El engine de la nube mantiene un **libro separado por región de origen** (`book:onprem:*`), así que no
+   mezcla prosumidores de regiones distintas. Los calces quedan marcados con `origin_region=onprem` y
+   `processed_by=cloud`.
+5. Cuando el engine local vuelve, publica un heartbeat **antes** de consumir su backlog. Si estuvo caído
+   más que `FAILOVER_AFTER` (lo detecta con `engine:last_alive` en su Redis), descarta las posiciones
+   anteriores a su arranque, porque ya las procesó la nube.
 
-### Paso 1: Conectarse al clúster AKS
-Verifica que el clúster esté iniciado (ver guía [FinOps](file:///d:/uniandes_local/nuevagen/docs/FINOPS_AKS.md)) y conecta tu CLI:
+**Garantías y límites (lab):**
+* At-least-once de punta a punta. Los duplicados de transporte se eliminan en el mesh (`ce-id`) y en
+  Facturación (`match_id`).
+* Hay una ventana de ~1–2 s alrededor de la recuperación en la que una posición puede calzarse en ambas
+  regiones (carrera entre el heartbeat y la posición en el bridge). Queda visible en `by_route`.
+* Si la nube está caída, el bridge no confirma offsets y el lag se acumula en Redpanda local.
+  `rpk group describe mesh-bridge` lo muestra.
+
+## 5. Observabilidad
+
+* Cada servicio exporta spans OTLP al `otel-collector` de su cluster, que los envía a Application
+  Insights (`voltera-dev-appinsights`).
+* Una traza por declaración: `inject declaration` → `publish/process voltera.ingress.declarations` →
+  `publish voltera.position.declared.v1` (vía outbox) → `match FCFS` (con *span link* a la posición
+  contraparte) → `POST mesh-router` (dependency, k3d) → `mesh ingest` (request, AKS) →
+  `publish voltera.mesh.billing.v1` → `process` en facturacion.
+* `cloud_RoleName` = `voltera.<servicio>` (service.namespace.service.name); `cloud.region` = `onprem` | `cloud`.
+* El orden por `timestamp` puede verse levemente alterado por el desfase de reloj entre WSL (k3d) y AKS; la jerarquía padre/hijo de la traza es la fuente de verdad.
+* Logs JSON con `trace_id` para correlacionar (`kubectl logs`).
+
+## 6. Pruebas manuales
+
 ```powershell
-az aks get-credentials --resource-group rg-voltera-dev --name voltera-dev-aks --overwrite-existing
-kubectl get nodes
+# Estado del mesh (interno, vía API server)
+kubectl --context voltera-dev-aks get --raw /api/v1/namespaces/voltera/services/mesh-router:80/proxy/status
+# Facturación
+kubectl --context voltera-dev-aks get --raw /api/v1/namespaces/voltera/services/facturacion:80/proxy/stats
+# Autenticación: sin token -> 401
+curl -i -X POST https://voltera-dev-mesh.eastus2.cloudapp.azure.com/mesh/events -H "Ce-Id: x" -H "Ce-Type: t"
 ```
-
-### Paso 2: Aplicar la Infraestructura del Event Mesh
-Asegúrate de que los manifiestos base y el mesh estén aplicados en el namespace `voltera`:
-```powershell
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/billing.yaml
-kubectl apply -f k8s/payment.yaml
-kubectl apply -f k8s/knative-event-mesh.yaml
-```
-
-Verifica el estado del Broker y los Triggers:
-```powershell
-kubectl get broker,trigger -n voltera
-```
-*(Todos deben reportar `READY=True`)*.
-
-### Paso 3: Obtener el Dominio Oficial de Azure (o IP Pública) del Ingress
-Azure asigna un FQDN oficial gratuito a través del servicio LoadBalancer:
-* **Dominio Oficial Azure**: `voltera-dev-mesh.eastus2.cloudapp.azure.com`
-* **IP Pública**:
-  ```powershell
-  $INGRESS_HOST = "voltera-dev-mesh.eastus2.cloudapp.azure.com"
-  # O consultar IP directamente si se requiere:
-  $INGRESS_IP = kubectl get svc istio-ingress -n istio-system -o jsonpath="{.status.loadBalancer.ingress[0].ip}"
-  ```
-*(Si usas el entorno local k3s, utiliza `localhost:8090`)*.
-
-### Paso 4: Monitorear el Consumidor de Eventos (Event Display Logger)
-Abre una terminal secundaria para ver cómo entran los eventos en tiempo real:
-```powershell
-kubectl logs -n voltera -l app=cloud-event-logger -f --tail=50
-```
-
-### Paso 5: Emitir Lecturas AMI desde el Simulador
-
-#### Opción A: Usando la suite de pruebas k6 (`tests/01_smoke_test.js`)
-Desde la carpeta raíz (vía canal seguro HTTPS hacia el dominio oficial de Azure):
-```powershell
-# Enviar lecturas AMI vía dominio oficial Azure AKS
-k6 run tests/01_smoke_test.js -e TARGET_URL="https://voltera-dev-mesh.eastus2.cloudapp.azure.com/events" -e COUNT=3 -e SLEEP=1.0
-```
-
-#### Opción B: Usando `curl` directamente sobre HTTPS
-```bash
-curl -k -X POST "https://voltera-dev-mesh.eastus2.cloudapp.azure.com/events" \
-  -H "Ce-Specversion: 1.0" \
-  -H "Ce-Type: com.voltera.ami.lectura_registrada" \
-  -H "Ce-Source: //manual/test/curl" \
-  -H "Ce-Id: evt-manual-tls-001" \
-  -H "Ce-Time: 2026-10-14T20:00:00Z" \
-  -H "Content-Type: application/json" \
-  -d '{"niu": "1002345", "medidor_serie": "MTR-TEST-TLS", "kwh_importados": 12.5, "kwh_exportados": 4.1}'
-```
-
-### Paso 6: Validar la Recepción en los Servicios
-1. En los logs de `cloud-event-logger` verás el CloudEvent completo formateado por `event_display`:
-   ```text
-   ☁️  cloudevents.Event
-   Validation: valid
-   Context Attributes,
-     specversion: 1.0
-     type: com.voltera.ami.lectura_registrada
-     source: //onprem/medidores/ami-mock
-     id: evt-ami-1792031544954-559
-   Data,
-     { "niu": "1002345", "kwh_importados": 14.25, ... }
-   ```
-2. En los logs del microservicio de facturación:
-   ```powershell
-   kubectl logs -n voltera -l app=billing-service -f
-   ```
-
----
-
-## 5. Resiliencia, Observabilidad y Patrones de Seguridad
-* **Seguridad Perimetral e Inter-Clúster (TLS 1.3 / HTTPS)**: El Ingress Gateway de Istio (`cloud-eventmesh-gateway`) expone el puerto `443` con terminación TLS (`credentialName: voltera-ingress-cert`). El tráfico transita 100% cifrado a través de Internet entre la región On-Premise y AKS. En el clúster local K3s, el `Trigger` ([`mock-onprem/k8s/trigger-to-cloud.yaml`](file:///d:/uniandes_local/nuevagen/mock-onprem/k8s/trigger-to-cloud.yaml)) incluye el certificado CA para validación estricta de confianza.
-* **Seguridad Intra-Clúster (mTLS STRICT)**: Una vez que el evento cruza el Gateway, los sidecars Envoy de Istio aplican mTLS estricto (`istio-auth-policy.yaml`) pod-a-pod dentro del namespace `voltera`.
-* **Desacoplamiento Temporal**: Si `billing-service` o `payment-service` se caen o están escalando, el Knative Broker retiene y reintenta la entrega según la política de backoff.
-* **Escalado Serverless**: Si la tasa de telemetría de medidores crece durante la noche, Knative Serving y KEDA pueden escalar los consumidores desde 0 hasta el límite de capacidad de cómputo del clúster.

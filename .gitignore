@@ -41,3 +41,6 @@ mock-onprem/mock-onprem
 *~
 .DS_Store
 Thumbs.db
+
+# Estado local del lab (tag de imagen, token del mesh)
+.lab/

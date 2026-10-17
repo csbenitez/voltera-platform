@@ -28,3 +28,8 @@ output "node_resource_group" {
   description = "Resource Group creado automáticamente por Azure para los nodos (MC_...)"
   value       = azurerm_kubernetes_cluster.aks.node_resource_group
 }
+
+output "kubelet_object_id" {
+  description = "Object ID de la identidad kubelet (para AcrPull)"
+  value       = azurerm_kubernetes_cluster.aks.kubelet_identity[0].object_id
+}

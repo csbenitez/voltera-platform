@@ -1,0 +1,31 @@
+# Vista de lectura en memoria (CQRS) con TTL para el matching-engine y dedup del mesh.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector: {app: redis}
+  ports:
+    - {port: 6379, targetPort: 6379}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: redis}
+  template:
+    metadata:
+      labels: {app: redis}
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.4-alpine
+          args: ["--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "volatile-lru"]
+          ports:
+            - containerPort: 6379
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 96Mi}

@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: voltera
+resources:
+  - namespace.yaml
+  - redpanda.yaml
+  - redis.yaml
+  - otel-collector.yaml
+  - apps.yaml
+  - keda-scaledobject.yaml
+configMapGenerator:
+  - name: voltera-config
+    literals:
+      - KAFKA_BROKERS=redpanda.voltera.svc.cluster.local:9092
+      - REDIS_ADDR=redis.voltera.svc.cluster.local:6379
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.voltera.svc.cluster.local:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - PRICE_INTERVAL=10s
+      - POSITION_TTL=10m
+      - HEARTBEAT_INTERVAL=5s
+      - FAILOVER_AFTER=15s
+generatorOptions:
+  disableNameSuffixHash: true   # el Job del injector referencia voltera-config por nombre

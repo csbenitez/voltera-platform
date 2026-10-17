@@ -13,20 +13,14 @@ output "aks_connect_command" {
   value       = "az aks get-credentials --resource-group ${module.network.resource_group_name} --name ${module.aks.cluster_name} --overwrite-existing"
 }
 
-output "eventgrid_topic_endpoint" {
-  description = "Endpoint del tópico Event Grid"
-  value       = module.eventgrid.endpoint
+output "acr_name" {
+  description = "Nombre del Azure Container Registry"
+  value       = module.acr.name
 }
 
-output "eventgrid_primary_key" {
-  description = "Clave primaria del tópico Event Grid"
-  value       = module.eventgrid.primary_access_key
-  sensitive   = true
-}
-
-output "apim_gateway_url" {
-  description = "URL del Gateway de Azure API Management"
-  value       = module.apigateway.gateway_url
+output "acr_login_server" {
+  description = "Login server del ACR (imagen voltera-eda)"
+  value       = module.acr.login_server
 }
 
 output "app_insights_connection_string" {

@@ -79,7 +79,7 @@ resource "azurerm_automation_schedule" "daily_stop" {
   automation_account_name = azurerm_automation_account.auto.name
   frequency               = "Day"
   interval                = 1
-  start_time              = "${timeadd(timestamp(), "24h")}"
+  start_time              = timeadd(timestamp(), "24h")
   description             = "Apaga automáticamente el clúster AKS a las 8:00 PM para ahorrar créditos VS Enterprise"
   timezone                = "America/Bogota"
 

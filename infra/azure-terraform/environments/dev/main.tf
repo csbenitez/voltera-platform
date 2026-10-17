@@ -19,7 +19,7 @@ module "monitoring" {
   tags                = var.tags
 }
 
-# 3. Clúster AKS (Free SKU + 1 nodo B4ms para aguantar Istio + Knative)
+# 3. Clúster AKS (Free SKU + 1 nodo B4ms: Istio edge + KEDA + Redpanda + mocks)
 module "aks" {
   source = "../../modules/aks"
 
@@ -35,27 +35,18 @@ module "aks" {
   tags                       = var.tags
 }
 
-# 4. Azure Event Grid Topic (Serverless CloudEvents 1.0)
-module "eventgrid" {
-  source = "../../modules/eventgrid"
+# 4. Azure Container Registry Basic (imagen voltera-eda) + AcrPull para AKS
+module "acr" {
+  source = "../../modules/acr"
 
   resource_group_name = module.network.resource_group_name
   location            = module.network.location
   prefix              = var.prefix
+  kubelet_object_id   = module.aks.kubelet_object_id
   tags                = var.tags
 }
 
-# 5. Azure API Management (Consumption Tier Serverless: $0 costo fijo)
-module "apigateway" {
-  source = "../../modules/apigateway"
-
-  resource_group_name = module.network.resource_group_name
-  location            = module.network.location
-  prefix              = var.prefix
-  tags                = var.tags
-}
-
-# 6. FinOps Automation (Runbooks y Schedule para apagar AKS automáticamente)
+# 5. FinOps Automation (Runbooks y Schedule para apagar AKS automáticamente)
 module "finops_automation" {
   source = "../../modules/finops_automation"
 

@@ -3,7 +3,7 @@
     Punto de entrada unificado para la gestión y ciclo de vida de la infraestructura de Voltera.
 .DESCRIPTION
     Simplifica la interacción con los entornos Cloud (Azure AKS) y Edge (K3s Local),
-    así como la instalación de la capa común de Add-ons (Istio, Knative, KEDA).
+    así como la instalación de la capa común de Add-ons (KEDA local; Istio edge + cert-manager + KEDA en AKS).
 .EXAMPLE
     # Iniciar clúster local K3s
     .\infra\manage.ps1 local start
@@ -32,8 +32,7 @@ param(
     [string]$Action = "status",
 
     [string]$ResourceGroup = "rg-voltera-dev",
-    [string]$ClusterName = "voltera-dev-aks",
-    [string]$PublicIp = ""
+    [string]$ClusterName = "voltera-dev-aks"
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,14 +47,14 @@ function Show-Help {
     Write-Host "🎯 Entornos (Target):" -ForegroundColor Green
     Write-Host "  local       Gestiona el clúster local K3s (k3d en Docker Desktop)"
     Write-Host "  azure       Gestiona el clúster Azure AKS, Terraform y FinOps"
-    Write-Host "  addons      Gestiona el stack de addons (Istio, Knative, KEDA)"
+    Write-Host "  addons      Gestiona el stack de addons (local: KEDA; azure: Istio edge + cert-manager + KEDA)"
     Write-Host ""
     Write-Host "⚡ Acciones para 'local':" -ForegroundColor Green
     Write-Host "  start       Inicia o aprovisiona el clúster k3d (setup-k3s.ps1)"
     Write-Host "  stop        Pausa el clúster para liberar CPU/RAM (teardown-k3s.ps1)"
     Write-Host "  delete      Elimina el clúster k3d completamente"
     Write-Host "  status      Muestra el estado de contenedores y nodos k3s"
-    Write-Host "  addons      Instala Istio, Knative y KEDA en el clúster local"
+    Write-Host "  addons      Instala KEDA en el clúster local"
     Write-Host ""
     Write-Host "⚡ Acciones para 'azure':" -ForegroundColor Green
     Write-Host "  status      Consulta el PowerState (Running/Stopped) de AKS"
@@ -64,7 +63,7 @@ function Show-Help {
     Write-Host "  connect     Descarga credenciales a kubectl (az aks get-credentials)"
     Write-Host "  plan        Ejecuta terraform plan en environments/dev"
     Write-Host "  apply       Ejecuta terraform apply en environments/dev"
-    Write-Host "  addons      Instala Istio, Knative y KEDA en Azure AKS"
+    Write-Host "  addons      Instala Istio edge, cert-manager y KEDA en AKS"
     Write-Host ""
     Write-Host "💡 Ejemplos Rápidos:" -ForegroundColor Cyan
     Write-Host "  pwsh .\infra\manage.ps1 local start"
@@ -99,9 +98,8 @@ switch ($Target) {
                 Write-Host "`n--- Contexto kubectl actual ---" -ForegroundColor Cyan
                 & kubectl cluster-info
             }
-            "addons" {
-                $ip = if ($PublicIp) { $PublicIp } else { "127.0.0.1" }
-                & "$infraRoot\addons\install.ps1" -Target local -PublicIp $ip
+            "addons" {
+                & "$infraRoot\addons\install.ps1" -Target local
             }
             default {
                 Write-Warning "Acción desconocida '$Action' para target local. Acciones válidas: start, stop, delete, status, addons."
@@ -142,8 +140,7 @@ switch ($Target) {
                 }
             }
             "addons" {
-                $params = @{ Target = "azure" }
-                if ($PublicIp) { $params["PublicIp"] = $PublicIp }
+                $params = @{ Target = "azure" }
                 & "$infraRoot\addons\install.ps1" @params
             }
             default {
@@ -154,8 +151,7 @@ switch ($Target) {
 
     "addons" {
         $clusterTarget = if ($Action -match "azure|local") { $Action } else { "local" }
-        $params = @{ Target = $clusterTarget }
-        if ($PublicIp) { $params["PublicIp"] = $PublicIp }
+        $params = @{ Target = $clusterTarget }
         & "$infraRoot\addons\install.ps1" @params
     }
 }
