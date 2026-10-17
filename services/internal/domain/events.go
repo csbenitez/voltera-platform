@@ -4,6 +4,7 @@ package domain
 import (
 	"errors"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -16,6 +17,8 @@ const (
 	TopicHeartbeat = "voltera.mesh.heartbeat.v1"          // latido del matching-engine
 	TopicFailover  = "voltera.mesh.failover.positions.v1" // posiciones/precios reenviados por el mesh (solo nube)
 	TopicBilling   = "voltera.mesh.billing.v1"            // salida consolidada del mesh hacia Facturación
+	TopicForward   = "voltera.declaration.forward.v1"     // declaraciones de medidores de otra región (Knative KafkaSource)
+	TopicDLQ       = "voltera.declaration.dlq.v1"         // dead-letter del Trigger de Knative
 )
 
 // Tipos CloudEvent.
@@ -25,7 +28,35 @@ const (
 	TypePrice       = "com.voltera.price.kwh.v1"
 	TypeMatched     = "com.voltera.energy.matched.v1"
 	TypeHeartbeat   = "com.voltera.mesh.heartbeat.v1"
+	TypeForwarded   = "com.voltera.ami.declaration.forwarded.v1"
 )
+
+// Regiones del lab.
+const (
+	RegionOnprem = "onprem"
+	RegionCloud  = "cloud"
+)
+
+// HomeRegion devuelve la región dueña de un medidor según su ID "AMI-<region>-NNNN".
+// Vacío si el ID no sigue el formato (se trata como propio).
+func HomeRegion(meterID string) string {
+	parts := strings.Split(meterID, "-")
+	if len(parts) < 3 || parts[0] != "AMI" {
+		return ""
+	}
+	if parts[1] == RegionOnprem || parts[1] == RegionCloud {
+		return parts[1]
+	}
+	return ""
+}
+
+// OtherRegion devuelve la región contraria a la dada.
+func OtherRegion(region string) string {
+	if region == RegionCloud {
+		return RegionOnprem
+	}
+	return RegionCloud
+}
 
 const (
 	Surplus = "SURPLUS"

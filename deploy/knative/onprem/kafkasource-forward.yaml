@@ -1,0 +1,20 @@
+# Región 1 (on-prem): lee las declaraciones de medidores ajenos que publica el
+# declaration-gateway y las envía como CloudEvents al ingress de la nube.
+# El token viaja como extensión CE (Ce-Meshtoken); en producción sería mTLS/OIDC.
+apiVersion: sources.knative.dev/v1beta1
+kind: KafkaSource
+metadata:
+  name: declaration-forward
+  namespace: voltera
+spec:
+  consumerGroup: knative-declaration-forward
+  bootstrapServers:
+    - redpanda.voltera.svc.cluster.local:9092
+  topics:
+    - voltera.declaration.forward.v1
+  initialOffset: earliest
+  ceOverrides:
+    extensions:
+      meshtoken: "__MESH_TOKEN__"
+  sink:
+    uri: https://voltera-dev-mesh.eastus2.cloudapp.azure.com/knative/declarations

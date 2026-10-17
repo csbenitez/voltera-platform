@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS declarations (
 CREATE TABLE IF NOT EXISTS outbox (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT, msg_key TEXT, event TEXT,
   traceparent TEXT, sent INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS forwarded (id TEXT PRIMARY KEY, home_region TEXT, received_at TEXT);
 CREATE INDEX IF NOT EXISTS outbox_pending ON outbox(sent, seq);`
 
 func main() {
@@ -71,6 +72,9 @@ func ingest(ctx context.Context, db *sql.DB, in platform.Event) error {
 		platform.Log(ctx).Warn("declaración inválida", "id", in.ID, "err", err)
 		return nil
 	}
+	if home := domain.HomeRegion(d.MeterID); home != "" && home != platform.Region() {
+		return forward(ctx, db, in, d, home)
+	}
 	pos := domain.PositionDeclared{
 		PositionID: in.ID, MeterID: d.MeterID, Kind: d.Kind, KWh: d.KWh,
 		DeclaredAt: time.Now().UTC(), Region: platform.Region(),
@@ -101,6 +105,40 @@ func ingest(ctx context.Context, db *sql.DB, in platform.Event) error {
 		return err
 	}
 	platform.Log(ctx).Info("declaración persistida", "id", in.ID, "meter", d.MeterID, "kind", d.Kind, "kwh", d.KWh)
+	return tx.Commit()
+}
+
+// forward reencamina al outbox (topic de Knative) una declaración de un medidor
+// que pertenece a otra región. No genera posición local: la región dueña la
+// procesará con el mismo ce-id. La extensión homeregion es la que filtra el Trigger.
+func forward(ctx context.Context, db *sql.DB, in platform.Event, d domain.Declaration, home string) error {
+	out, err := platform.NewEvent(domain.TypeForwarded, "//"+platform.Region()+"/declaration-gateway", d)
+	if err != nil {
+		return err
+	}
+	out.ID = in.ID
+	out.Ext = map[string]string{"homeregion": home, "originregion": platform.Region()}
+	evJSON, _ := json.Marshal(out)
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`INSERT INTO forwarded VALUES (?,?,?) ON CONFLICT(id) DO NOTHING`,
+		in.ID, home, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		platform.Log(ctx).Info("reenvío duplicado ignorado", "id", in.ID)
+		return tx.Commit()
+	}
+	if _, err := tx.Exec(`INSERT INTO outbox(topic,msg_key,event,traceparent) VALUES (?,?,?,?)`,
+		domain.TopicForward, d.MeterID, string(evJSON), platform.TraceparentOf(ctx)); err != nil {
+		return err
+	}
+	platform.Log(ctx).Info("declaración reenviada a otra región", "id", in.ID, "meter", d.MeterID, "home", home)
 	return tx.Commit()
 }
 

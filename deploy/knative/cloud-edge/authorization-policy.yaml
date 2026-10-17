@@ -1,0 +1,17 @@
+# Vive en istio-system porque el selector apunta al pod del ingress.
+# Se aplica aparte de deploy/knative/cloud (que fuerza el namespace voltera).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: knative-token
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels: {istio: ingress}
+  action: DENY
+  rules:
+    - to:
+        - operation: {paths: ["/knative/*"]}
+      when:
+        - key: request.headers[ce-meshtoken]
+          notValues: ["__MESH_TOKEN__"]

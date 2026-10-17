@@ -22,6 +22,7 @@ func main() {
 	n := flag.Int("n", platform.EnvInt("INJECT_N", 100), "número de declaraciones")
 	rate := flag.Int("rate", platform.EnvInt("INJECT_RATE", 50), "mensajes por segundo")
 	meters := flag.Int("meters", platform.EnvInt("INJECT_METERS", 40), "medidores distintos")
+	foreign := flag.Float64("foreign", 0, "fracción (0..1) de medidores que pertenecen a la otra región (caso de uso Knative)")
 	flag.Parse()
 
 	platform.Run("injector", func(ctx context.Context) error {
@@ -40,8 +41,12 @@ func main() {
 			if i%2 == 1 {
 				kind = domain.Deficit
 			}
+			home := region
+			if rand.Float64() < *foreign {
+				home = domain.OtherRegion(region)
+			}
 			d := domain.Declaration{
-				MeterID:    fmt.Sprintf("AMI-%s-%04d", region, rand.IntN(*meters)+1),
+				MeterID:    fmt.Sprintf("AMI-%s-%04d", home, rand.IntN(*meters)+1),
 				Kind:       kind,
 				KWh:        domain.Round(0.5+rand.Float64()*4.5, 3),
 				MeasuredAt: time.Now().UTC(),

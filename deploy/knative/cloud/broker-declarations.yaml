@@ -1,0 +1,34 @@
+# Región 2 (nube): Kafka Broker sobre el Redpanda existente. El Broker guarda
+# los eventos en un topic propio (knative-broker-voltera-declarations).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-broker-config
+  namespace: voltera
+data:
+  default.topic.partitions: "3"
+  default.topic.replication.factor: "1"
+  bootstrap.servers: "redpanda.voltera.svc.cluster.local:9092"
+---
+apiVersion: eventing.knative.dev/v1
+kind: Broker
+metadata:
+  name: declarations
+  namespace: voltera
+  annotations:
+    eventing.knative.dev/broker.class: Kafka
+spec:
+  config:
+    apiVersion: v1
+    kind: ConfigMap
+    name: kafka-broker-config
+    namespace: voltera
+  delivery:
+    retry: 5
+    backoffPolicy: exponential
+    backoffDelay: PT1S
+    deadLetterSink:
+      ref:
+        apiVersion: eventing.knative.dev/v1alpha1
+        kind: KafkaSink
+        name: declaration-dlq

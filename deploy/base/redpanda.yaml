@@ -92,4 +92,6 @@ spec:
               c voltera.mesh.heartbeat.v1 1
               c voltera.mesh.failover.positions.v1 1
               c voltera.mesh.billing.v1 3
+              c voltera.declaration.forward.v1 3
+              c voltera.declaration.dlq.v1 1
               rpk topic list $B

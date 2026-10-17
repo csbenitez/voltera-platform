@@ -24,6 +24,9 @@ type Event struct {
 	Region string          `json:"region"`
 	Time   time.Time       `json:"time"`
 	Data   json.RawMessage `json:"data"`
+	// Ext son extensiones CloudEvent adicionales (nombres en minúscula y alfanuméricos),
+	// p. ej. homeregion para que un Trigger de Knative filtre por región dueña.
+	Ext map[string]string `json:"ext,omitempty"`
 }
 
 func NewID() string {
@@ -82,6 +85,9 @@ func (e Event) ToRecord(ctx context.Context, topic, key string) *kgo.Record {
 	c.Set("ce_source", e.Source)
 	c.Set("ce_region", e.Region)
 	c.Set("ce_time", e.Time.Format(time.RFC3339Nano))
+	for k, v := range e.Ext {
+		c.Set("ce_"+k, v)
+	}
 	c.Set("content-type", "application/json")
 	otel.GetTextMapPropagator().Inject(ctx, c)
 	return r
