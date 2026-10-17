@@ -24,7 +24,7 @@ Hay **dos tipos de spans** en este camino:
 | Origen | Spans | Garantía |
 |---|---|---|
 | Código del lab | `inject declaration`, `publish voltera.declaration.forward.v1`, **`knative forward cloud`**, `process voltera.ingress.declarations` (con `voltera.forwarded_from=onprem`) | Siempre aparecen |
-| Componentes de Knative (KafkaSource, Broker, Trigger, KafkaSink) | Roles que empiezan por `knative`/`kafka-` | **Best-effort**: dependen de que `config-tracing` apunte al collector (lo hace `addons -Knative`) y de la versión del dataplane |
+| Componentes de Knative (KafkaSource, Broker, Trigger, KafkaSink) | Roles que empiezan por `knative`/`kafka-` | **Best-effort**: dependen de que `config-observability` apunte al collector por OTLP (lo hace `addons -Knative`) y de la versión del dataplane |
 
 Por eso el salto es visible aunque Knative no exporte nada: el span `knative forward <región>` marca la
 salida, y el `process` de la nube lleva `voltera.forwarded_from` y `voltera.channel=knative`.
@@ -88,7 +88,9 @@ Además, **Application Map** debe mostrar `declaration-gateway (onprem)` conecta
 ```
 
 * `addons -Knative` instala las versiones de `infra/addons/versions.env` (`KNATIVE_VERSION`,
-  `KNATIVE_KAFKA_VERSION`) y apunta `config-tracing` al receptor `zipkin` del `otel-collector`.
+  `KNATIVE_KAFKA_VERSION`) y apunta `config-observability` (`tracing-endpoint`) al puerto OTLP/HTTP 4318 del `otel-collector`.
+  También baja los `requests` de CPU de los data planes de Kafka (piden 1 CPU y el nodo k3d tiene 2) y apaga
+  `job-sink` y `request-reply`, que el lab no usa.
 * `cleanup` ya **no** borra Knative Eventing; solo Serving y restos de la arquitectura anterior.
 * Costo: Knative Eventing vuelve a ocupar RAM en los nodos (ver `FINOPS_AKS.md`). Medir con
   `kubectl top nodes` antes y después.

@@ -73,9 +73,19 @@ if ($Knative) {
     } else {
         Invoke-Native kubectl @("--context", $Context, "apply", "-f", "$KK/eventing-kafka-source.yaml")
     }
-    # Los spans de Knative llegan al otel-collector de la región (receptor zipkin) y de ahí a App Insights.
-    $patch = '{\"data\":{\"backend\":\"zipkin\",\"zipkin-endpoint\":\"http://otel-collector.voltera.svc.cluster.local:9411/api/v2/spans\",\"sample-rate\":\"1\"}}'
-    Invoke-Native kubectl @("--context", $Context, "-n", "knative-eventing", "patch", "cm", "config-tracing", "--type", "merge", "-p", $patch)
+    # Trazas de Knative -> otel-collector de la región (OTLP/HTTP) -> App Insights. Desde 1.18 se
+    # configuran en config-observability (config-tracing quedó deprecado). Se pasa por archivo para
+    # evitar problemas de comillas al invocar kubectl.
+    $patchFile = Join-Path ([IO.Path]::GetTempPath()) "knative-observability-patch.json"
+    '{"data":{"tracing-protocol":"http/protobuf","tracing-endpoint":"http://otel-collector.voltera.svc.cluster.local:4318/v1/traces","tracing-sampling-rate":"1"}}' |
+        Set-Content -Path $patchFile -Encoding utf8NoBOM
+    Invoke-Native kubectl @("--context", $Context, "-n", "knative-eventing", "patch", "cm", "config-observability", "--type", "merge", "--patch-file", $patchFile)
+    # Los data planes piden 1 CPU y los nodos del lab son chicos (k3d: 2 CPU): bajar requests (los límites no cambian)
+    # y apagar lo que el lab no usa para que el pod no quede Pending.
+    foreach ($w in (kubectl --context $Context -n knative-eventing get deploy, sts -o name | Where-Object { $_ -match 'kafka-(source|broker|sink)-(dispatcher|receiver)' })) {
+        Invoke-Native kubectl @("--context", $Context, "-n", "knative-eventing", "set", "resources", $w, "--requests=cpu=100m,memory=200Mi")
+    }
+    kubectl --context $Context -n knative-eventing scale deploy/job-sink sts/request-reply --replicas=0 2>$null | Out-Null
 }
 
 Write-Host "`nAdd-ons listos en $Target." -ForegroundColor Green

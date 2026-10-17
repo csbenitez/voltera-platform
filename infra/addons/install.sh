@@ -56,8 +56,15 @@ if [[ "$KNATIVE" == 1 ]]; then
   else
     "${KC[@]}" apply -f "$KK/eventing-kafka-source.yaml"
   fi
-  # Los spans de Knative llegan al otel-collector de la región (receptor zipkin) y de ahí a App Insights.
-  "${KC[@]}" -n knative-eventing patch cm config-tracing --type merge -p     '{"data":{"backend":"zipkin","zipkin-endpoint":"http://otel-collector.voltera.svc.cluster.local:9411/api/v2/spans","sample-rate":"1"}}'
+  # Trazas de Knative -> otel-collector de la región (OTLP/HTTP) -> App Insights. Desde 1.18 se
+  # configuran en config-observability (config-tracing quedó deprecado).
+  "${KC[@]}" -n knative-eventing patch cm config-observability --type merge -p '{"data":{"tracing-protocol":"http/protobuf","tracing-endpoint":"http://otel-collector.voltera.svc.cluster.local:4318/v1/traces","tracing-sampling-rate":"1"}}'
+  # Los data planes piden 1 CPU y los nodos del lab son chicos (k3d: 2 CPU): bajar requests (los límites no cambian)
+  # y apagar lo que el lab no usa para que el pod no quede Pending.
+  for w in $("${KC[@]}" -n knative-eventing get deploy,sts -o name | grep -E 'kafka-(source|broker|sink)-(dispatcher|receiver)'); do
+    "${KC[@]}" -n knative-eventing set resources "$w" --requests=cpu=100m,memory=200Mi
+  done
+  "${KC[@]}" -n knative-eventing scale deploy/job-sink sts/request-reply --replicas=0 2>/dev/null || true
   "${KC[@]}" -n knative-eventing get pods
 fi
 echo "Add-ons listos en $TARGET."
