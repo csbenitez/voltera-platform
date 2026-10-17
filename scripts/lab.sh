@@ -2,8 +2,8 @@
 # CLI del lab EDA de Voltera (equivalente POSIX de scripts/lab.ps1).
 #   ./scripts/lab.sh <comando> [onprem|cloud|all] [opciones]
 # Comandos: cleanup | addons | build | secrets | deploy | up | inject | status |
-#           failover-test | trace | logs | aks <start|stop|status> | down
-# Opciones por variables de entorno: N=100 RATE=50 TAG=... TRACE_ID=... SERVICE=matching-engine FORCE=1
+#           failover-test | knative-test | knative-kql | trace | logs | aks <start|stop|status> | down
+# Opciones por variables de entorno: KNATIVE=1 (addons) FOREIGN=0.2 (inject) N=100 RATE=50 TAG=... TRACE_ID=... SERVICE=matching-engine FORCE=1
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,7 +11,7 @@ STATE="$ROOT/.lab"; mkdir -p "$STATE"
 TF_DIR="$ROOT/infra/azure-terraform/environments/dev"
 RG=rg-voltera-dev; AKS=voltera-dev-aks; K3D=voltera-onprem; NS=voltera
 LOCAL_IMAGE=voltera/voltera-eda
-N="${N:-100}"; RATE="${RATE:-50}"
+N="${N:-100}"; RATE="${RATE:-50}"; FOREIGN="${FOREIGN:-0}"
 
 CMD="${1:-help}"; TARGET="${2:-all}"
 ctx() { [[ "$1" == cloud ]] && echo voltera-dev-aks || echo k3d-voltera-onprem; }
@@ -41,13 +41,12 @@ cleanup() {
     step "Limpieza de la arquitectura anterior en $t"
     confirm "¿Eliminar Knative, servicios viejos (billing/payment/ami-mock) y extras en $t?"
     k "$t" delete ksvc --all -n default --ignore-not-found 2>/dev/null || true
-    k "$t" delete broker,trigger --all -A --ignore-not-found 2>/dev/null || true
-    k "$t" delete ns knative-serving knative-eventing --ignore-not-found --wait=false
-    k "$t" get validatingwebhookconfiguration,mutatingwebhookconfiguration -o name | grep knative | xargs -r kubectl --context "$(ctx "$t")" delete --ignore-not-found
+    k "$t" delete ns knative-serving --ignore-not-found --wait=false   # Eventing se conserva (deploy/knative)
+    k "$t" get validatingwebhookconfiguration,mutatingwebhookconfiguration -o name | grep 'knative' | grep -v 'eventing\|kafka' | xargs -r kubectl --context "$(ctx "$t")" delete --ignore-not-found
     k "$t" get routes.serving.knative.dev,services.serving.knative.dev -A \
       -o jsonpath='{range .items[*]}{.kind} {.metadata.name} {.metadata.namespace}{"\n"}{end}' 2>/dev/null |
       while read -r kind name rns; do [[ -n "$name" ]] && k "$t" -n "$rns" patch "${kind,,}/$name" --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null || true; done
-    k "$t" get crd -o name | grep 'knative\.dev' | xargs -r kubectl --context "$(ctx "$t")" delete --ignore-not-found --wait=false
+    k "$t" get crd -o name | grep 'serving\.knative\.dev\|networking\.internal\.knative\.dev\|caching\.internal\.knative\.dev' | xargs -r kubectl --context "$(ctx "$t")" delete --ignore-not-found --wait=false
     k "$t" delete svc knative-local-gateway -n istio-system --ignore-not-found
     if [[ "$t" == onprem ]]; then
       k "$t" delete ns voltera-onprem --ignore-not-found --wait=false
@@ -69,7 +68,7 @@ cleanup() {
   done
 }
 
-addons() { for t in $(targets); do "$ROOT/infra/addons/install.sh" --target "$([[ $t == cloud ]] && echo azure || echo local)"; done; }
+addons() { for t in $(targets); do "$ROOT/infra/addons/install.sh" --target "$([[ $t == cloud ]] && echo azure || echo local)" $([[ "${KNATIVE:-}" == 1 ]] && echo --knative); done; }
 
 build() {
   local tg="${TAG:-$(date +%Y%m%d-%H%M%S)}"
@@ -120,13 +119,14 @@ deploy() {
       k "$t" -n "$NS" rollout status "$d" --timeout=120s
     done
   done
+  deploy_knative
 }
 
 inject() {
   for t in $(targets); do
     local stamp job; stamp="$(date +%H%M%S)"; job="injector-$stamp"
     step "Inyectando $N declaraciones en $t -> job/$job"
-    sed -e "s#__STAMP__#$stamp#" -e "s#__N__#$N#" -e "s#__RATE__#$RATE#" -e "s#__IMAGE__#$(image "$t")#" \
+    sed -e "s#__STAMP__#$stamp#" -e "s#__N__#$N#" -e "s#__RATE__#$RATE#" -e "s#__FOREIGN__#$FOREIGN#" -e "s#__IMAGE__#$(image "$t")#" \
       "$ROOT/deploy/jobs/injector.yaml" | k "$t" apply -f -
     k "$t" -n "$NS" wait --for=condition=complete "job/$job" --timeout=300s
     k "$t" -n "$NS" logs "job/$job" | grep -v '^{' | tee "$STATE/last-inject.log"
@@ -142,6 +142,10 @@ status() {
     if [[ "$t" == cloud ]]; then
       echo "--- Event Mesh"; svc_json mesh-router /status
       echo "--- Facturación"; svc_json facturacion /stats
+      k "$t" -n "$NS" get broker,trigger,kafkasink 2>/dev/null || true
+    else
+      k "$t" -n "$NS" get kafkasource 2>/dev/null || true
+      k "$t" -n "$NS" exec redpanda-0 -c redpanda -- rpk group describe knative-declaration-forward 2>/dev/null | grep -E 'GROUP|TOTAL-LAG|STATE' || true
     fi
   done
 }
@@ -170,6 +174,70 @@ failover_test() {
   else echo "FAIL: nuevos=$((after - before)) normal=$back"; exit 1; fi
 }
 
+
+knative_kql() {
+  cat <<'KQL'
+// 1) Vista general del canal Knative: quién envió, quién recibió y en qué región
+union dependencies, requests
+| where timestamp > ago(2h)
+| extend ch = tostring(customDimensions["voltera.channel"]), fwd = tostring(customDimensions["voltera.forwarded_from"]),
+         msg = tostring(customDimensions["messaging.message.id"])
+| where ch == "knative" or cloud_RoleName startswith "knative" or name startswith "knative forward"
+| project timestamp, cloud_RoleName, name, itemType, duration, fwd, msg, operation_Id
+| order by timestamp asc
+
+// 2) Una declaración de punta a punta (ambas trazas) por su ce-id, aunque Knative corte el traceparent
+let id = "<ce-id>";
+union dependencies, requests
+| where timestamp > ago(2h)
+| where tostring(customDimensions["messaging.message.id"]) == id
+| project timestamp, cloud_RoleName, name, duration, operation_Id, region = tostring(customDimensions["voltera.origin_region"])
+| order by timestamp asc
+
+// 3) ¿Se cortó el traceparent? Una declaración reenviada con DOS operation_Id distintos = traza partida
+union dependencies, requests
+| where timestamp > ago(2h) and tostring(customDimensions["messaging.message.id"]) != ""
+| summarize trazas = dcount(operation_Id), roles = make_set(cloud_RoleName) by msg = tostring(customDimensions["messaging.message.id"])
+| where array_length(roles) > 3
+| summarize unidas = countif(trazas == 1), partidas = countif(trazas > 1)
+KQL
+}
+
+hw() { # suma de high-watermark de un topic: hw <ctx-target> <topic>
+  k "$1" -n "$NS" exec redpanda-0 -c redpanda -- rpk topic describe "$2" -p 2>/dev/null |
+    awk 'NR==1{for(i=1;i<=NF;i++) if($i=="HIGH-WATERMARK") c=i; next} c&&$1~/^[0-9]+$/{s+=$c} END{print s+0}'
+}
+
+deploy_knative() {
+  for t in $(targets); do
+    local crd=kafkasources.sources.knative.dev; [[ "$t" == cloud ]] && crd=kafkasinks.eventing.knative.dev
+    if ! k "$t" get crd "$crd" >/dev/null 2>&1; then echo "Knative no instalado en $t (addons con KNATIVE=1); se omite deploy/knative"; continue; fi
+    step "Knative en $t"
+    local tok; tok="$(cat "$STATE/mesh-token")"
+    [[ "$t" == cloud ]] && { kubectl kustomize "$ROOT/deploy/knative/cloud-edge" | sed "s#__MESH_TOKEN__#$tok#g" | k "$t" apply -f -; }
+    kubectl kustomize "$ROOT/deploy/knative/$t" | sed "s#__MESH_TOKEN__#$tok#g" | k "$t" apply -f -
+  done
+}
+
+knative_test() {
+  TARGET=onprem; FOREIGN="${FOREIGN:-0.2}"
+  step "Línea base (high-watermark de los topics)"
+  local f0 i0 d0; f0="$(hw onprem voltera.declaration.forward.v1)"; i0="$(hw cloud voltera.ingress.declarations)"; d0="$(hw cloud voltera.declaration.dlq.v1)"
+  echo "forward(onprem)=$f0 ingress(nube)=$i0 dlq(nube)=$d0"
+  inject
+  step "Esperando que Knative entregue en la nube (hasta 90 s)"
+  local f1 i1 d1 df di dd
+  for _ in $(seq 30); do
+    sleep 3; f1="$(hw onprem voltera.declaration.forward.v1)"; i1="$(hw cloud voltera.ingress.declarations)"
+    df=$((f1 - f0)); di=$((i1 - i0)); (( df > 0 && di >= df )) && break
+  done
+  d1="$(hw cloud voltera.declaration.dlq.v1)"; dd=$((d1 - d0))
+  echo "reenviadas por el gateway onprem: $df | llegadas a la ingesta de la nube: $di | DLQ: $dd"
+  if (( df > 0 && di == df && dd == 0 )); then echo "PASS: $df declaraciones ajenas cruzaron onprem -> nube vía Knative, sin pérdida ni DLQ"
+  else echo "FAIL (si la nube también recibe inyección propia, di puede exceder df)"; fi
+  step "Ver en Application Insights (Logs)"; knative_kql
+}
+
 trace() {
   local id="${TRACE_ID:-$(cat "$STATE/last-trace" 2>/dev/null || true)}"
   [[ -z "$id" ]] && { echo "Indica TRACE_ID=<id>"; exit 1; }
@@ -189,6 +257,8 @@ case "$CMD" in
   inject) inject ;;
   status) status ;;
   failover-test) failover_test ;;
+  knative-test) knative_test ;;
+  knative-kql) knative_kql ;;
   trace) trace ;;
   logs) t="$TARGET"; [[ "$t" == all ]] && t=onprem; k "$t" -n "$NS" logs -f "deploy/${SERVICE:-matching-engine}" --tail=50 ;;
   aks)

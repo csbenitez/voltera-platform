@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	_ "modernc.org/sqlite"
 
 	"github.com/csbenitez/voltera-eda/internal/domain"
@@ -117,7 +119,18 @@ func forward(ctx context.Context, db *sql.DB, in platform.Event, d domain.Declar
 		return err
 	}
 	out.ID = in.ID
-	out.Ext = map[string]string{"homeregion": home, "originregion": platform.Region()}
+	// Span explícito del salto: en App Insights es el último eslabón visible en la región
+	// origen antes de que Knative (KafkaSource -> Broker -> Trigger -> KafkaSink) tome el evento.
+	ctx, span := platform.Tracer().Start(ctx, "knative forward "+home,
+		trace.WithAttributes(
+			attribute.String("messaging.message.id", in.ID),
+			attribute.String("voltera.channel", "knative"),
+			attribute.String("voltera.origin_region", platform.Region()),
+			attribute.String("voltera.home_region", home)))
+	defer span.End()
+	// traceparent como extensión CE: es como Knative lo transporta entre sus componentes.
+	out.Ext = map[string]string{"homeregion": home, "originregion": platform.Region(),
+		"traceparent": platform.TraceparentOf(ctx)}
 	evJSON, _ := json.Marshal(out)
 
 	tx, err := db.BeginTx(ctx, nil)

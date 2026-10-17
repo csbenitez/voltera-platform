@@ -18,6 +18,6 @@ spec:
         - name: injector
           image: __IMAGE__
           imagePullPolicy: IfNotPresent
-          command: ["/svc/injector", "-n", "__N__", "-rate", "__RATE__"]
+          command: ["/svc/injector", "-n", "__N__", "-rate", "__RATE__", "-foreign", "__FOREIGN__"]
           envFrom:
             - configMapRef: {name: voltera-config}

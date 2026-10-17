@@ -138,17 +138,22 @@ func handleWithRetry(ctx context.Context, r *kgo.Record, maxRetries int, h Handl
 			}
 			continue
 		}
+		attrs := []attribute.KeyValue{
+			attribute.String("messaging.system", "kafka"),
+			attribute.String("messaging.source.name", r.Topic),
+			attribute.Int("messaging.kafka.partition", int(r.Partition)),
+			attribute.Int64("messaging.kafka.offset", r.Offset),
+			attribute.String("messaging.message.id", ev.ID),
+			attribute.String("cloudevents.event_type", ev.Type),
+			attribute.String("voltera.origin_region", ev.Region),
+			attribute.Int("voltera.attempt", attempt),
+		}
+		if o := ev.Ext["originregion"]; o != "" { // llegó por el canal Knative desde otra región
+			attrs = append(attrs, attribute.String("voltera.forwarded_from", o),
+				attribute.String("voltera.channel", "knative"))
+		}
 		sctx, span := Tracer().Start(pctx, "process "+r.Topic, trace.WithSpanKind(trace.SpanKindConsumer),
-			trace.WithAttributes(
-				attribute.String("messaging.system", "kafka"),
-				attribute.String("messaging.source.name", r.Topic),
-				attribute.Int("messaging.kafka.partition", int(r.Partition)),
-				attribute.Int64("messaging.kafka.offset", r.Offset),
-				attribute.String("messaging.message.id", ev.ID),
-				attribute.String("cloudevents.event_type", ev.Type),
-				attribute.String("voltera.origin_region", ev.Region),
-				attribute.Int("voltera.attempt", attempt),
-			))
+			trace.WithAttributes(attrs...))
 		err := h(sctx, ev, r)
 		if err != nil {
 			span.RecordError(err)

@@ -15,6 +15,8 @@
       up             build + secrets + deploy.
       inject         Lanza el Job injector con -N declaraciones a -Rate msg/s.
       status         Pods, KEDA, lag de Redpanda, estado del Event Mesh y facturación.
+      knative-test   Inyecta declaraciones de medidores ajenos (-Foreign) y verifica el cruce onprem -> nube por Knative.
+      knative-kql    Imprime las consultas KQL para ver el canal Knative en Application Insights.
       failover-test  Apaga el matching-engine local, inyecta, verifica que el mesh enruta a la nube y restaura.
       trace          Muestra la consulta KQL (y la ejecuta si hay extensión az) para un trace id.
       logs           Sigue los logs de -Service en -Target.
@@ -30,7 +32,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet("cleanup", "addons", "build", "secrets", "deploy", "up", "inject", "status",
-        "failover-test", "trace", "logs", "aks", "down", "help")]
+        "failover-test", "knative-test", "knative-kql", "trace", "logs", "aks", "down", "help")]
     [string]$Command = "help",
 
     [ValidateSet("onprem", "cloud", "all")]
@@ -38,6 +40,8 @@ param(
 
     [int]$N = 100,
     [int]$Rate = 50,
+    [double]$Foreign = 0,      # fracción de medidores de la otra región (ruteo Knative)
+    [switch]$Knative,          # en addons: instala Knative Eventing
     [string]$Tag = "",
     [string]$TraceId = "",
     [string]$Service = "matching-engine",
@@ -132,10 +136,9 @@ function Invoke-Cleanup {
 
         # Knative (ambos)
         K $t delete ksvc --all -n default --ignore-not-found 2>$null | Out-Null
-        K $t delete broker --all -A --ignore-not-found 2>$null | Out-Null
-        K $t delete trigger --all -A --ignore-not-found 2>$null | Out-Null
-        K $t delete ns knative-serving knative-eventing --ignore-not-found --wait=false | Out-Null
-        $hooks = K $t get "validatingwebhookconfiguration,mutatingwebhookconfiguration" -o name 2>$null | Where-Object { $_ -match "knative" }
+        # Knative Eventing se conserva: lo usa el ruteo de declaraciones (deploy\knative). Solo se retira Serving.
+        K $t delete ns knative-serving --ignore-not-found --wait=false | Out-Null
+        $hooks = K $t get "validatingwebhookconfiguration,mutatingwebhookconfiguration" -o name 2>$null | Where-Object { $_ -match "knative" -and $_ -notmatch "eventing|kafka" }
         if ($hooks) { K $t delete @hooks --ignore-not-found | Out-Null }
         # Sin controladores de Knative los finalizers de routes/ksvc bloquean el borrado de CRDs
         foreach ($r in (K $t get "routes.serving.knative.dev,services.serving.knative.dev" -A -o jsonpath='{range .items[*]}{.kind}/{.metadata.name} -n {.metadata.namespace}{"\n"}{end}' 2>$null)) {
@@ -143,7 +146,7 @@ function Invoke-Cleanup {
             $kind, $null, $rns = $r -split ' '
             K $t patch $kind.ToLower() -n $rns --type=merge -p '{\"metadata\":{\"finalizers\":[]}}' 2>$null | Out-Null
         }
-        $crds = K $t get crd -o name 2>$null | Where-Object { $_ -match "knative\.dev" }
+        $crds = K $t get crd -o name 2>$null | Where-Object { $_ -match "serving\.knative\.dev|networking\.internal\.knative\.dev|caching\.internal\.knative\.dev" }
         if ($crds) { K $t delete @crds --ignore-not-found --wait=false | Out-Null }
         K $t delete svc knative-local-gateway -n istio-system --ignore-not-found | Out-Null
         K $t delete gateway knative-ingress-gateway knative-local-gateway -n knative-serving --ignore-not-found 2>$null | Out-Null
@@ -187,7 +190,8 @@ function Invoke-Cleanup {
 function Invoke-Addons {
     foreach ($t in Targets) {
         $tt = if ($t -eq "cloud") { "azure" } else { "local" }
-        & "$Root\infra\addons\install.ps1" -Target $tt -Context $Ctx[$t]
+        if ($Knative) { & "$Root\infra\addons\install.ps1" -Target $tt -Context $Ctx[$t] -Knative }
+        else { & "$Root\infra\addons\install.ps1" -Target $tt -Context $Ctx[$t] }
     }
 }
 
@@ -268,6 +272,7 @@ function Invoke-Deploy {
         }
         Ok "Región $t desplegada."
     }
+    Invoke-KnativeDeploy
 }
 
 function Invoke-Inject {
@@ -276,7 +281,7 @@ function Invoke-Inject {
         $job = "injector-$stamp"
         Step "Inyectando $N declaraciones en $t ($Rate msg/s) -> job/$job"
         $yaml = (Get-Content "$Root\deploy\jobs\injector.yaml" -Raw).
-            Replace("__STAMP__", $stamp).Replace("__N__", "$N").Replace("__RATE__", "$Rate").Replace("__IMAGE__", (Get-Image $t))
+            Replace("__STAMP__", $stamp).Replace("__N__", "$N").Replace("__RATE__", "$Rate").Replace("__FOREIGN__", [string]::Format([cultureinfo]::InvariantCulture, "{0}", $Foreign)).Replace("__IMAGE__", (Get-Image $t))
         $yaml | K $t apply -f - | Out-Null
         K $t -n $Ns wait --for=condition=complete "job/$job" --timeout=300s | Out-Null
         K $t -n $Ns logs "job/$job" | Where-Object { $_ -notmatch '^\{' } | Out-Host
@@ -302,6 +307,11 @@ function Show-Status {
             }
             $fac = Get-SvcJson cloud "facturacion" "/stats"
             if ($fac) { Info "Facturación:"; $fac | ConvertTo-Json -Depth 4 | Out-Host }
+            K $t -n $Ns get broker, trigger, kafkasink 2>$null | Out-Host
+        } else {
+            K $t -n $Ns get kafkasource 2>$null | Out-Host
+            K $t -n $Ns exec redpanda-0 -c redpanda -- rpk group describe knative-declaration-forward 2>$null |
+                Select-String -Pattern "GROUP|TOTAL-LAG|STATE" | Out-Host
         }
     }
 }
@@ -364,6 +374,84 @@ function Invoke-FailoverTest {
     }
 }
 
+
+function Show-KnativeKql {
+    Step "Consultas para Application Insights > Logs (canal Knative)"
+    Write-Host @'
+// 1) Vista general del canal Knative: quién envió, quién recibió y en qué región
+union dependencies, requests
+| where timestamp > ago(2h)
+| extend ch = tostring(customDimensions["voltera.channel"]), fwd = tostring(customDimensions["voltera.forwarded_from"]),
+         msg = tostring(customDimensions["messaging.message.id"])
+| where ch == "knative" or cloud_RoleName startswith "knative" or name startswith "knative forward"
+| project timestamp, cloud_RoleName, name, itemType, duration, fwd, msg, operation_Id
+| order by timestamp asc
+
+// 2) Una declaración de punta a punta (ambas trazas) por su ce-id, aunque Knative corte el traceparent
+let id = "<ce-id>";
+union dependencies, requests
+| where timestamp > ago(2h)
+| where tostring(customDimensions["messaging.message.id"]) == id
+| project timestamp, cloud_RoleName, name, duration, operation_Id, region = tostring(customDimensions["voltera.origin_region"])
+| order by timestamp asc
+
+// 3) ¿Se cortó el traceparent? Más de un operation_Id por declaración = traza partida
+union dependencies, requests
+| where timestamp > ago(2h) and tostring(customDimensions["messaging.message.id"]) != ""
+| summarize trazas = dcount(operation_Id), roles = make_set(cloud_RoleName) by msg = tostring(customDimensions["messaging.message.id"])
+| where array_length(roles) > 3
+| summarize unidas = countif(trazas == 1), partidas = countif(trazas > 1)
+'@
+}
+
+function Get-TopicHw([string]$T, [string]$Topic) {
+    $hdr = $null; $sum = [long]0
+    foreach ($l in (K $T -n $Ns exec redpanda-0 -c redpanda -- rpk topic describe $Topic -p 2>$null)) {
+        $f = $l.Trim() -split '\s+'
+        if ($f -contains 'HIGH-WATERMARK') { $hdr = [array]::IndexOf($f, 'HIGH-WATERMARK'); continue }
+        if ($null -ne $hdr -and $f[0] -match '^\d+$') { $sum += [long]$f[$hdr] }
+    }
+    return $sum
+}
+
+function Invoke-KnativeDeploy {
+    foreach ($t in Targets) {
+        $crd = if ($t -eq "cloud") { "kafkasinks.eventing.knative.dev" } else { "kafkasources.sources.knative.dev" }
+        K $t get crd $crd 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { Warn "Knative no instalado en $t (addons -Knative); se omite deploy\knative"; continue }
+        Step "Knative en $t"
+        $tok = (Get-Content (Join-Path $StateDir "mesh-token") -Raw).Trim()
+        if ($t -eq "cloud") {
+            ((& kubectl kustomize "$Root\deploy\knative\cloud-edge") -join "`n").Replace("__MESH_TOKEN__", $tok) | K $t apply -f - | Out-Host
+        }
+        ((& kubectl kustomize "$Root\deploy\knative\$t") -join "`n").Replace("__MESH_TOKEN__", $tok) | K $t apply -f - | Out-Host
+    }
+}
+
+function Invoke-KnativeTest {
+    $script:Target = "onprem"
+    if ($Foreign -le 0) { $script:Foreign = 0.2 }
+    Step "Línea base (high-watermark de los topics)"
+    $f0 = Get-TopicHw onprem "voltera.declaration.forward.v1"
+    $i0 = Get-TopicHw cloud "voltera.ingress.declarations"
+    $d0 = Get-TopicHw cloud "voltera.declaration.dlq.v1"
+    Info "forward(onprem)=$f0 ingress(nube)=$i0 dlq(nube)=$d0"
+    Invoke-Inject
+    Step "Esperando que Knative entregue en la nube (hasta 90 s)"
+    $df = 0; $di = 0
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep 3
+        $df = (Get-TopicHw onprem "voltera.declaration.forward.v1") - $f0
+        $di = (Get-TopicHw cloud "voltera.ingress.declarations") - $i0
+        if ($df -gt 0 -and $di -ge $df) { break }
+    }
+    $dd = (Get-TopicHw cloud "voltera.declaration.dlq.v1") - $d0
+    Info "reenviadas por el gateway onprem: $df | llegadas a la ingesta de la nube: $di | DLQ: $dd"
+    if ($df -gt 0 -and $di -eq $df -and $dd -eq 0) { Ok "PASS: $df declaraciones ajenas cruzaron onprem -> nube vía Knative, sin pérdida ni DLQ" }
+    else { Warn "FAIL (si la nube también recibe inyección propia, di puede exceder df)"; $script:ExitCode = 1 }
+    Show-KnativeKql
+}
+
 function Show-Trace {
     $id = $TraceId
     if (-not $id) {
@@ -401,6 +489,8 @@ switch ($Command) {
     "inject" { Invoke-Inject }
     "status" { Show-Status }
     "failover-test" { Invoke-FailoverTest }
+    "knative-test" { Invoke-KnativeTest; if ($script:ExitCode) { exit $script:ExitCode } }
+    "knative-kql" { Show-KnativeKql }
     "trace" { Show-Trace }
     "logs" { $t = if ($Target -eq "all") { "onprem" } else { $Target }; K $t -n $Ns logs -f "deploy/$Service" --tail=50 }
     "aks" { & "$Root\infra\azure-terraform\scripts\aks-power.ps1" -Action $Action -ResourceGroup $ResourceGroup -ClusterName $AksName }

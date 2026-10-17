@@ -152,6 +152,7 @@ Escenario base: `inject -Target onprem -N 500 -Foreign 0.2`, es decir, unas 100 
 no lo hacen, la traza se corta en el KafkaSource. En ese caso se documenta como hallazgo de la
 comparación (K7).
 
+Cómo ver el canal en App Insights, qué spans esperar y las consultas KQL: [`KNATIVE.md`](KNATIVE.md).
 Las pruebas existentes (`failover-test`, `trace`, KEDA) se siguen corriendo para confirmar que el
 mesh no se vio afectado.
 

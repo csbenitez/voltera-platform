@@ -12,6 +12,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Event es un CloudEvent 1.0 en modo binario: los atributos viajan en headers
@@ -101,7 +102,23 @@ func FromRecord(ctx context.Context, r *kgo.Record) (context.Context, Event) {
 		ID: c.Get("ce_id"), Type: c.Get("ce_type"), Source: c.Get("ce_source"),
 		Region: c.Get("ce_region"), Time: t, Data: r.Value,
 	}
-	return otel.GetTextMapPropagator().Extract(ctx, c), ev
+	for _, k := range []string{"homeregion", "originregion"} {
+		if v := c.Get("ce_" + k); v != "" {
+			if ev.Ext == nil {
+				ev.Ext = map[string]string{}
+			}
+			ev.Ext[k] = v
+		}
+	}
+	pctx := otel.GetTextMapPropagator().Extract(ctx, c)
+	if !trace.SpanContextFromContext(pctx).IsValid() {
+		// Knative (KafkaSource/Broker/KafkaSink) mueve el traceparent como extensión CloudEvent
+		// "traceparent", que en Kafka viaja como header ce_traceparent.
+		if tp := c.Get("ce_traceparent"); tp != "" {
+			pctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{"traceparent": tp})
+		}
+	}
+	return pctx, ev
 }
 
 // ---- HTTP ----
