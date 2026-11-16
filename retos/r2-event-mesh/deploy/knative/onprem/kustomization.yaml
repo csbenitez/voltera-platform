@@ -1,0 +1,7 @@
+# Overlay Knative de la región 1. Requiere Knative Eventing + KafkaSource instalados
+# (infra/addons) y reemplazar __MESH_TOKEN__ (lo hace scripts/lab).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: voltera
+resources:
+  - kafkasource-forward.yaml

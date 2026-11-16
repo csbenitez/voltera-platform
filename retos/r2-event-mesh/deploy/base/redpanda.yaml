@@ -1,0 +1,97 @@
+# Broker regional (Redpanda single-node en modo dev). emptyDir: el lab es efímero
+# y evita discos administrados en AKS (FinOps). Retención corta por topic.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+spec:
+  selector: {app: redpanda}
+  ports:
+    - {name: kafka, port: 9092, targetPort: 9092}
+    - {name: admin, port: 9644, targetPort: 9644}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda-hl
+spec:
+  clusterIP: None
+  selector: {app: redpanda}
+  ports:
+    - {name: kafka, port: 9092}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redpanda
+spec:
+  serviceName: redpanda-hl
+  replicas: 1
+  selector:
+    matchLabels: {app: redpanda}
+  template:
+    metadata:
+      labels: {app: redpanda}
+    spec:
+      containers:
+        - name: redpanda
+          image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+          args:
+            - redpanda
+            - start
+            - --mode=dev-container
+            - --smp=1
+            - --memory=700M
+            - --reserve-memory=0M
+            - --overprovisioned
+            - --kafka-addr=internal://0.0.0.0:9092
+            - --advertise-kafka-addr=internal://redpanda.voltera.svc.cluster.local:9092
+            - --rpc-addr=0.0.0.0:33145
+            - --advertise-rpc-addr=redpanda-0.redpanda-hl.voltera.svc.cluster.local:33145
+          ports:
+            - {containerPort: 9092, name: kafka}
+            - {containerPort: 9644, name: admin}
+          readinessProbe:
+            httpGet: {path: /v1/status/ready, port: 9644}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 200m, memory: 900Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/redpanda/data}
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+# Crea los topics (idempotente). ingress con 6 particiones => KEDA puede llegar a 6 réplicas.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redpanda-topics
+spec:
+  backoffLimit: 20
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: rpk
+          image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              B="-X brokers=redpanda.voltera.svc.cluster.local:9092 -X admin.hosts=redpanda.voltera.svc.cluster.local:9644"
+              rpk cluster health $B --watch --exit-when-healthy
+              c() { rpk topic create "$1" -p "$2" -r 1 -c retention.ms=3600000 $B || true; }
+              c voltera.ingress.declarations 6
+              c voltera.position.declared.v1 3
+              c voltera.price.kwh.v1 1
+              c voltera.energy.matched.v1 3
+              c voltera.mesh.heartbeat.v1 1
+              c voltera.mesh.failover.positions.v1 1
+              c voltera.mesh.billing.v1 3
+              c voltera.declaration.forward.v1 3
+              c voltera.declaration.dlq.v1 1
+              rpk topic list $B

@@ -1,0 +1,24 @@
+# Destinos del Trigger: la cola normal de ingesta (la consume declaration-gateway)
+# y el dead-letter. contentMode binary conserva ce_id/ce_type como headers Kafka,
+# igual que el resto de los eventos del lab.
+apiVersion: eventing.knative.dev/v1alpha1
+kind: KafkaSink
+metadata:
+  name: declaration-ingress
+  namespace: voltera
+spec:
+  topic: voltera.ingress.declarations
+  bootstrapServers:
+    - redpanda.voltera.svc.cluster.local:9092
+  contentMode: binary
+---
+apiVersion: eventing.knative.dev/v1alpha1
+kind: KafkaSink
+metadata:
+  name: declaration-dlq
+  namespace: voltera
+spec:
+  topic: voltera.declaration.dlq.v1
+  bootstrapServers:
+    - redpanda.voltera.svc.cluster.local:9092
+  contentMode: binary

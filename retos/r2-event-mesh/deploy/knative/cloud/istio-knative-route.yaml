@@ -1,0 +1,20 @@
+# Expone el Broker en /knative/declarations por el mismo ingress (TLS) del Event
+# Mesh y exige el token en Ce-Meshtoken (compromiso de laboratorio, ver plan §3).
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: knative-edge
+  namespace: voltera
+spec:
+  hosts: ["*"]
+  gateways: [mesh-edge-gateway]
+  http:
+    - match:
+        - uri: {prefix: /knative/declarations}
+      rewrite:
+        uri: /voltera/declarations
+      route:
+        - destination:
+            host: kafka-broker-ingress.knative-eventing.svc.cluster.local
+            port: {number: 80}
+      timeout: 15s

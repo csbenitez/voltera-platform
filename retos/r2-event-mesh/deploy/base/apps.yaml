@@ -1,0 +1,162 @@
+# Pipeline regional (idéntica en on-prem y nube). Imagen única 'voltera-eda' (kustomize images).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: declaration-gateway
+  labels: {app: declaration-gateway, app.kubernetes.io/part-of: voltera-eda}
+spec:
+  replicas: 0   # lo gestiona KEDA (0..5)
+  selector:
+    matchLabels: {app: declaration-gateway}
+  template:
+    metadata:
+      labels: {app: declaration-gateway, app.kubernetes.io/part-of: voltera-eda}
+    spec:
+      containers:
+        - name: declaration-gateway
+          image: voltera-eda
+          imagePullPolicy: IfNotPresent
+          command: ["/svc/declaration-gateway"]
+          envFrom:
+            - configMapRef: {name: voltera-config}
+          ports:
+            - {containerPort: 8080, name: http}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: declaration-gateway
+spec:
+  selector: {app: declaration-gateway}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: price-feed-simulator
+  labels: {app: price-feed-simulator, app.kubernetes.io/part-of: voltera-eda}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: price-feed-simulator}
+  template:
+    metadata:
+      labels: {app: price-feed-simulator, app.kubernetes.io/part-of: voltera-eda}
+    spec:
+      containers:
+        - name: price-feed-simulator
+          image: voltera-eda
+          imagePullPolicy: IfNotPresent
+          command: ["/svc/price-feed-simulator"]
+          envFrom:
+            - configMapRef: {name: voltera-config}
+          ports:
+            - {containerPort: 8080, name: http}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 128Mi}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: price-feed-simulator
+spec:
+  selector: {app: price-feed-simulator}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: matching-engine
+  labels: {app: matching-engine, app.kubernetes.io/part-of: voltera-eda}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}   # un único dueño del libro de órdenes
+  selector:
+    matchLabels: {app: matching-engine}
+  template:
+    metadata:
+      labels: {app: matching-engine, app.kubernetes.io/part-of: voltera-eda}
+    spec:
+      containers:
+        - name: matching-engine
+          image: voltera-eda
+          imagePullPolicy: IfNotPresent
+          command: ["/svc/matching-engine"]
+          envFrom:
+            - configMapRef: {name: voltera-config}
+          ports:
+            - {containerPort: 8080, name: http}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 128Mi}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: matching-engine
+spec:
+  selector: {app: matching-engine}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: energy-transfer
+  labels: {app: energy-transfer, app.kubernetes.io/part-of: voltera-eda}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: energy-transfer}
+  template:
+    metadata:
+      labels: {app: energy-transfer, app.kubernetes.io/part-of: voltera-eda}
+    spec:
+      containers:
+        - name: energy-transfer
+          image: voltera-eda
+          imagePullPolicy: IfNotPresent
+          command: ["/svc/energy-transfer"]
+          envFrom:
+            - configMapRef: {name: voltera-config}
+          ports:
+            - {containerPort: 8080, name: http}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 128Mi}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: energy-transfer
+spec:
+  selector: {app: energy-transfer}
+  ports:
+    - {name: http, port: 80, targetPort: http}

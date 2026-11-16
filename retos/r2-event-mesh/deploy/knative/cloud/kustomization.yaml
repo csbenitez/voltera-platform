@@ -1,0 +1,10 @@
+# Overlay Knative de la región 2. Requiere Knative Eventing + eventing-kafka-broker
+# (Broker, Trigger, KafkaSink) y reemplazar __MESH_TOKEN__ (lo hace scripts/lab).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: voltera
+resources:
+  - broker-declarations.yaml
+  - kafkasink-ingress.yaml
+  - trigger-forwarded.yaml
+  - istio-knative-route.yaml

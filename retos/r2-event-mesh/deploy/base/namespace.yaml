@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: voltera
+  labels:
+    app.kubernetes.io/part-of: voltera-eda
+    istio-injection: disabled   # Istio solo actúa como edge (ingress) en AKS

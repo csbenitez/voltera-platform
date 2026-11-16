@@ -1,0 +1,19 @@
+# Región 2 (nube, AKS) + Event Mesh central + Facturación.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: voltera
+resources:
+  - ../base
+  - mesh.yaml
+  - istio-edge.yaml
+configMapGenerator:
+  - name: voltera-config
+    behavior: merge
+    literals:
+      - REGION=cloud
+images:
+  - name: voltera-eda
+    newName: __ACR__/voltera/voltera-eda
+    newTag: __TAG__
+generatorOptions:
+  disableNameSuffixHash: true   # el Job del injector referencia voltera-config por nombre

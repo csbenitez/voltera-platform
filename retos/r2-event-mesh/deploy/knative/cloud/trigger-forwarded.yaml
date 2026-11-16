@@ -1,0 +1,27 @@
+# Solo pasan las declaraciones reenviadas cuyo medidor pertenece a la nube.
+# Cualquier otro valor de homeregion queda filtrado (prueba K2).
+apiVersion: eventing.knative.dev/v1
+kind: Trigger
+metadata:
+  name: forwarded-to-cloud
+  namespace: voltera
+spec:
+  broker: declarations
+  filter:
+    attributes:
+      type: com.voltera.ami.declaration.forwarded.v1
+      homeregion: cloud
+  subscriber:
+    ref:
+      apiVersion: eventing.knative.dev/v1alpha1
+      kind: KafkaSink
+      name: declaration-ingress
+  delivery:
+    retry: 5
+    backoffPolicy: exponential
+    backoffDelay: PT1S
+    deadLetterSink:
+      ref:
+        apiVersion: eventing.knative.dev/v1alpha1
+        kind: KafkaSink
+        name: declaration-dlq

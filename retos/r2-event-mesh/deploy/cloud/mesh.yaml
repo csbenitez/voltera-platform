@@ -1,0 +1,81 @@
+# Event Mesh central (router) + mock de Facturación. Solo región nube.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mesh-router
+  labels: {app: mesh-router, app.kubernetes.io/part-of: voltera-eda}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mesh-router}
+  template:
+    metadata:
+      labels: {app: mesh-router, app.kubernetes.io/part-of: voltera-eda}
+    spec:
+      containers:
+        - name: mesh-router
+          image: voltera-eda
+          imagePullPolicy: IfNotPresent
+          command: ["/svc/mesh-router"]
+          envFrom:
+            - configMapRef: {name: voltera-config}
+          env:
+            - name: MESH_TOKEN
+              valueFrom:
+                secretKeyRef: {name: mesh-token, key: token}
+            - {name: FAILOVER_REGION, value: onprem}
+            - {name: REPLAY_WINDOW, value: 60s}
+          ports:
+            - {containerPort: 8080, name: http}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mesh-router
+spec:
+  selector: {app: mesh-router}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: facturacion
+  labels: {app: facturacion, app.kubernetes.io/part-of: voltera-eda}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: facturacion}
+  template:
+    metadata:
+      labels: {app: facturacion, app.kubernetes.io/part-of: voltera-eda}
+    spec:
+      containers:
+        - name: facturacion
+          image: voltera-eda
+          imagePullPolicy: IfNotPresent
+          command: ["/svc/facturacion"]
+          envFrom:
+            - configMapRef: {name: voltera-config}
+          ports:
+            - {containerPort: 8080, name: http}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: facturacion
+spec:
+  selector: {app: facturacion}
+  ports:
+    - {name: http, port: 80, targetPort: http}

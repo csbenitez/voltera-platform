@@ -1,0 +1,32 @@
+# Conector de la región on-prem hacia el Event Mesh central (AKS).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mesh-bridge
+  labels: {app: mesh-bridge, app.kubernetes.io/part-of: voltera-eda}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mesh-bridge}
+  template:
+    metadata:
+      labels: {app: mesh-bridge, app.kubernetes.io/part-of: voltera-eda}
+    spec:
+      containers:
+        - name: mesh-bridge
+          image: voltera-eda
+          imagePullPolicy: IfNotPresent
+          command: ["/svc/mesh-bridge"]
+          envFrom:
+            - configMapRef: {name: voltera-config}
+          env:
+            - name: MESH_TOKEN
+              valueFrom:
+                secretKeyRef: {name: mesh-token, key: token}
+          ports:
+            - {containerPort: 8080, name: http}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 128Mi}
