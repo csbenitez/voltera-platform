@@ -10,11 +10,27 @@
 Los niveles gratuitos limitan las peticiones por minuto: LLM_RPS fija el ritmo y se reintenta ante 429.
 """
 import os
+import pathlib
 
 from langchain.chat_models import init_chat_model
 from langchain_core.rate_limiters import InMemoryRateLimiter
 
 _limitador = None
+
+
+def _cargar_env():
+    """Fuera de Docker, toma la configuración del .env de la raíz del monorepo (sin pisar variables ya definidas)."""
+    ruta = pathlib.Path(__file__).resolve().parents[3] / ".env"
+    if not ruta.exists():
+        return
+    for linea in ruta.read_text(encoding="utf-8").splitlines():
+        if "=" in linea and not linea.lstrip().startswith("#"):
+            k, v = linea.split("=", 1)
+            if v.strip():
+                os.environ.setdefault(k.strip(), v.strip())
+
+
+_cargar_env()
 
 
 def _ritmo():
@@ -27,7 +43,9 @@ def _ritmo():
 def crear_llm(rol: str = "rapido"):
     """rol: 'fuerte' (supervisor y sintetizador) o 'rapido' (especialistas)."""
     proveedor = os.environ.get("LLM_PROVIDER", "google_genai")
-    modelo = os.environ.get("LLM_MODEL", "gemini-2.5-flash")
+    modelo = os.environ.get("LLM_MODEL") or ("gemini-2.5-flash" if proveedor == "google_genai" else "")
     if rol == "fuerte":
-        modelo = os.environ.get("LLM_MODEL_FUERTE", modelo)
+        modelo = os.environ.get("LLM_MODEL_FUERTE") or modelo
+    if not modelo:
+        raise RuntimeError("Falta LLM_MODEL en .env (en Azure Foundry es el nombre del despliegue del modelo).")
     return init_chat_model(modelo, model_provider=proveedor, temperature=0, rate_limiter=_ritmo(), max_retries=4)

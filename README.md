@@ -21,6 +21,8 @@ Copiloto: http://localhost:8501 · MCP: http://localhost:18000/mcp · por consol
 
 Clientes de demo: `NIC-2001001` (factura alta), `NIC-2001002` (pagó y sigue pendiente), `NIC-2001003` (factura alterada), `NIC-2001004` (sin anclar).
 
-El LLM se elige con `LLM_PROVIDER` y `LLM_MODEL` (ver `retos/r4-agentes-ia/copiloto/llm.py`); por defecto Gemini en nivel gratuito.
+El LLM se elige con `LLM_PROVIDER` y `LLM_MODEL` (ver `retos/r4-agentes-ia/copiloto/llm.py`); `.env.example` trae la configuración para Azure AI Foundry.
+
+Arquitectura: [docs/arquitectura-unificada.md](docs/arquitectura-unificada.md) · [ADR del tipo de RAG](docs/adr/0001-tipo-de-rag.md)
 
 Pruebas del copiloto: `pytest` en `retos/r4-agentes-ia`.
