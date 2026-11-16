@@ -1,0 +1,12 @@
+# Puertos remapeados (8080-8082 chocan con las herramientas de R3) y perfil `pagos`.
+services:
+  operator-db:                 { profiles: !override [pagos, todo] }
+  participant-db:              { profiles: !override [pagos, todo] }
+  router-db:                   { profiles: !override [pagos, todo], networks: !override [default, voltera] }
+  gateway-card:                { profiles: !override [pagos, todo], ports: !override ["18091:8443"] }
+  gateway-bank:                { profiles: !override [pagos, todo], ports: !override ["18092:8443"] }
+  participant-payment-manager: { profiles: !override [pagos, todo], networks: !override [default, voltera], ports: !override ["18081:8080"] }
+  payment-router:              { profiles: !override [pagos, todo], ports: !override ["18082:8080"] }
+  payment-operator:            { profiles: !override [pagos, todo], networks: !override [default, voltera], ports: !override ["18080:8080"] }
+networks:
+  voltera: { name: voltera-platform-net }

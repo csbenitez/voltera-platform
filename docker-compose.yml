@@ -1,0 +1,135 @@
+# Stack unificado de demo del copiloto de facturación.
+# Perfiles: cadena (R3) · pagos (R1) · eventos (R2) · ia (R4). `--profile todo` los levanta todos.
+name: voltera-platform
+
+include:
+  - path:
+      - retos/r1-service-mesh/deploy/docker/docker-compose.yml
+      - compose/r1.override.yml
+    project_directory: retos/r1-service-mesh/deploy/docker
+    env_file: [.env]
+  - path:
+      - retos/r3-blockchain/docker-compose.yml
+      - compose/r3.override.yml
+    project_directory: retos/r3-blockchain
+    env_file: [retos/r3-blockchain/.env, .env]
+
+x-eda: &eda
+  image: voltera-eda
+  pull_policy: never
+  profiles: [eventos, todo]
+  environment: &eda-env
+    KAFKA_BROKERS: redpanda:9092
+    REDIS_ADDR: redis:6379
+    REGION: cloud
+    FAILOVER_REGION: onprem
+    MESH_TOKEN: ${MESH_TOKEN:-demo-token}
+    PRICE_INTERVAL: 10s
+    POSITION_TTL: 10m
+    OTEL_SDK_DISABLED: "true"
+  restart: unless-stopped
+  networks: [voltera]
+
+networks:
+  voltera: { name: voltera-platform-net }
+
+services:
+  # ---------- R2 · Event mesh (una región: la nube) ----------
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    profiles: [eventos, todo]
+    networks: [voltera]
+    command: [redpanda, start, --mode=dev-container, --smp=1, --memory=512M, --reserve-memory=0M,
+      --overprovisioned, --kafka-addr=internal://0.0.0.0:9092, --advertise-kafka-addr=internal://redpanda:9092]
+    healthcheck: { test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"], interval: 5s, timeout: 5s, retries: 30 }
+  redpanda-topics:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    profiles: [eventos, todo]
+    networks: [voltera]
+    depends_on: { redpanda: { condition: service_healthy } }
+    restart: "no"
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        B="-X brokers=redpanda:9092"
+        c() { rpk topic create "$$1" -p "$$2" -r 1 -c retention.ms=3600000 $$B || true; }
+        c voltera.ingress.declarations 3; c voltera.position.declared.v1 3; c voltera.price.kwh.v1 1
+        c voltera.energy.matched.v1 3; c voltera.mesh.heartbeat.v1 1; c voltera.mesh.failover.positions.v1 1
+        c voltera.mesh.billing.v1 3
+  redis:
+    image: redis:7-alpine
+    profiles: [eventos, todo]
+    networks: [voltera]
+  declaration-gateway:
+    <<: *eda
+    build: { context: retos/r2-event-mesh/services }
+    pull_policy: build
+    tmpfs: ["/data:uid=65532,gid=65532"]
+    command: ["/svc/declaration-gateway"]
+    depends_on: { redpanda-topics: { condition: service_completed_successfully } }
+  price-feed-simulator:
+    <<: *eda
+    command: ["/svc/price-feed-simulator"]
+    depends_on: { redpanda-topics: { condition: service_completed_successfully } }
+  matching-engine:
+    <<: *eda
+    command: ["/svc/matching-engine"]
+    depends_on: { redpanda-topics: { condition: service_completed_successfully }, redis: { condition: service_started } }
+  mesh-router:
+    <<: *eda
+    command: ["/svc/mesh-router"]
+    depends_on: { redpanda-topics: { condition: service_completed_successfully }, redis: { condition: service_started } }
+  facturacion:
+    <<: *eda
+    command: ["/svc/facturacion"]
+    ports: ["18083:8080"]
+    depends_on: { redpanda-topics: { condition: service_completed_successfully } }
+  injector:
+    <<: *eda
+    command: ["/svc/injector"]
+    profiles: [inyector]
+    restart: "no"
+    environment:
+      <<: *eda-env
+      INJECT_N: ${INJECT_N:-100}
+      INJECT_RATE: 20
+      INJECT_METERS: 8
+
+  # ---------- R4 · Copiloto de IA ----------
+  copiloto-db:
+    image: pgvector/pgvector:pg16
+    profiles: [ia, todo]
+    environment: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: copiloto }
+    volumes: [./retos/r4-agentes-ia/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro]
+    ports: ["15432:5432"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres -d copiloto"], interval: 3s, timeout: 3s, retries: 20 }
+    networks: [voltera]
+  mcp-server:
+    build: { context: retos/r4-agentes-ia }
+    profiles: [ia, todo]
+    command: ["python", "-m", "mcp_server.server"]
+    environment:
+      COPILOTO_DB_RO: postgresql://copiloto_ro:ro-demo@copiloto-db:5432/copiloto
+      COPILOTO_DB_RW: postgresql://copiloto_rw:rw-demo@copiloto-db:5432/copiloto
+    ports: ["18000:8000"]
+    depends_on: { copiloto-db: { condition: service_healthy } }
+    networks: [voltera]
+  copiloto:
+    build: { context: retos/r4-agentes-ia, args: { EXTRAS: "[serve]" } }
+    profiles: [ia, todo]
+    command: ["chainlit", "run", "copiloto/app.py", "--host", "0.0.0.0", "--port", "8501", "--headless"]
+    environment:
+      MCP_URL: http://mcp-server:8000/mcp
+      COPILOTO_DB_RO: postgresql://copiloto_ro:ro-demo@copiloto-db:5432/copiloto
+      LLM_PROVIDER: ${LLM_PROVIDER:-google_genai}
+      LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash}
+      LLM_MODEL_FUERTE: ${LLM_MODEL_FUERTE:-}
+      LLM_RPS: ${LLM_RPS:-0.2}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports: ["8501:8501"]
+    depends_on: { mcp-server: { condition: service_started } }
+    networks: [voltera]

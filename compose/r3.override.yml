@@ -1,0 +1,10 @@
+# Besu + invoice-verifier bajo el perfil `cadena`.
+services:
+  besu-init:        { profiles: !override [cadena, todo] }
+  node1:            { profiles: !override [cadena, todo] }
+  node2:            { profiles: !override [cadena, todo] }
+  node3:            { profiles: !override [cadena, todo] }
+  node4:            { profiles: !override [cadena, todo] }
+  invoice-verifier: { profiles: !override [cadena, todo], networks: !override [chain, voltera] }
+networks:
+  voltera: { name: voltera-platform-net }

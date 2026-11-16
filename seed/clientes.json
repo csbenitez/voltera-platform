@@ -1,0 +1,10 @@
+[
+  {"nic":"NIC-2001001","nombre":"Ana María Peña","direccion":"Calle 26 # 13-48, Bogotá","medidor":"AMI-cloud-0001","participant_id":"participant-card","comunidad":"Comunidad Solar Chapinero","escenario":"factura_alta",
+   "plan":"Prosumidor Básico","alta":"2025-03-01","paneles_kw":"2","instrumento":"tarjeta","detalle_plan":"Con 2 kW de paneles la generación propia no cubre el consumo del hogar, por lo que el titular compra energía a vecinos con frecuencia.","condicion":"El titular autorizó la compra automática de energía P2P cuando su generación sea insuficiente, sin tope mensual."},
+  {"nic":"NIC-2001002","nombre":"José Ángel Núñez","direccion":"Carrera 7 # 40-62, Bogotá","medidor":"AMI-cloud-0002","participant_id":"participant-bank","comunidad":"Comunidad Solar Chapinero","escenario":"pago_no_reflejado",
+   "plan":"Prosumidor Plus","alta":"2024-11-15","paneles_kw":"5","instrumento":"transferencia bancaria","detalle_plan":"Con 5 kW de paneles el titular suele tener excedentes que vende a la comunidad.","condicion":"El titular tiene débito por transferencia: paga manualmente cada mes desde su banco usando como referencia el identificador de la factura."},
+  {"nic":"NIC-2001003","nombre":"Lucía Muñoz Sáenz","direccion":"Avenida Boyacá # 80-11, Medellín","medidor":"AMI-cloud-0003","participant_id":"participant-wallet","comunidad":"Comunidad Energética Laureles","escenario":"factura_alterada",
+   "plan":"Consumidor Comunidad","alta":"2026-01-10","paneles_kw":"0","instrumento":"billetera digital","detalle_plan":"El titular no tiene paneles: solo compra energía de la red y de vecinos.","condicion":"El titular solicitó recibir la evidencia de anclaje en la cadena junto con cada factura."},
+  {"nic":"NIC-2001004","nombre":"Andrés Gómez Ibáñez","direccion":"Calle 100 # 19-54, Bogotá","medidor":"AMI-cloud-0004","participant_id":"participant-card","comunidad":"Comunidad Solar Ciudad Jardín","escenario":"sin_anclar",
+   "plan":"Prosumidor Básico","alta":"2026-09-20","paneles_kw":"3","instrumento":"tarjeta","detalle_plan":"Cliente reciente, en su segundo ciclo de facturación.","condicion":"Sin condiciones particulares."}
+]

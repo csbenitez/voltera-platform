@@ -6,3 +6,8 @@ deployments/e*.json
 **/__pycache__/
 .venv/
 *.pyc
+seed/out/
+.chainlit/
+.files/
+*.egg-info/
+.pytest_cache/
