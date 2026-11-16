@@ -18,35 +18,114 @@ medidores que pertenecen a la otra región.
 ```mermaid
 flowchart LR
   subgraph R1["Región 1 · on-prem (k3d)"]
-    INJ["injector<br/>Job / dashboard"] --> T1[("ingress.declarations")]
-    T1 --> GW1["declaration-gateway<br/>KEDA 0..5 · outbox"]
-    GW1 -->|"medidor propio"| POS1[("position.declared")]
-    POS1 --> ME1["matching-engine"]
-    PF1["price-feed"] --> ME1
-    ME1 --> ET1["energy-transfer"]
-    ME1 -->|"EnergyMatched + heartbeat"| BR["mesh-bridge"]
-    GW1 -->|"medidor ajeno"| FWD[("declaration.forward")]
-    FWD --> KS["KafkaSource<br/>Knative"]
+    INJ["injector"] --> GW1["declaration-gateway"]
+    GW1 -->|"medidor propio"| ME1["matching-engine<br/>+ energy-transfer"]
+    GW1 -->|"medidor ajeno"| KS["KafkaSource<br/>(Knative)"]
+    ME1 -->|"EnergyMatched"| BR["mesh-bridge"]
+  end
+  subgraph R2["Región 2 · nube (AKS)"]
+    ING["Istio ingress<br/>TLS + token"]
+    ING -->|"/mesh"| MR["mesh-router<br/>(Event Mesh)"]
+    MR --> FAC["facturacion"]
+    ING -->|"/knative"| KN["Broker → Trigger<br/>→ KafkaSink"]
+    KN --> GW2["declaration-gateway"]
+    GW2 --> ME2["matching-engine"]
+    MR -.->|"failover"| ME2
+  end
+  BR ==>|"Canal 1: Event Mesh"| ING
+  KS ==>|"Canal 2: Knative"| ING
+  linkStyle 10 stroke:#185FA5,stroke-width:3px
+  linkStyle 11 stroke:#0F6E56,stroke-width:3px
+```
+
+Lectura del diagrama:
+- **Línea azul (Canal 1, Event Mesh):** lo que ya se calzó on-prem viaja de `mesh-bridge` a `mesh-router`,
+  que lo consolida y lo manda a `facturacion`. Si el engine on-prem cae, el router reenvía (línea punteada)
+  al engine de la nube.
+- **Línea verde (Canal 2, Knative):** una declaración de un medidor de la otra región sale del gateway por el
+  `KafkaSource`, atraviesa `Broker → Trigger → KafkaSink` y entra como una declaración más al gateway de la nube.
+- Ambos canales entran por el mismo ingress de la nube y se separan por ruta (`/mesh` y `/knative`).
+- Todos los servicios exportan trazas a Application Insights por OTLP (no se dibuja para no saturar).
+
+> Los diagramas son bloques `mermaid`: se ven en la vista previa de Markdown de VS Code (extensión
+> *Markdown Preview Mermaid Support*), en GitHub y en el visor de documentos de la app. Si tu visor no los
+> renderiza, pega el bloque en <https://mermaid.live>.
+
+### Todos los componentes (detalle)
+
+```mermaid
+flowchart TB
+  subgraph R1["Región 1 · on-prem (k3d)"]
+    direction TB
+    subgraph R1P["Pipeline EDA"]
+      INJ["injector / dashboard"] --> GW1["declaration-gateway<br/>KEDA 0..5"]
+      GW1 --> ME1["matching-engine"]
+      PF1["price-feed-simulator"] --> ME1
+      ME1 --> ET1["energy-transfer"]
+    end
+    BR["mesh-bridge<br/>(Event Mesh)"]
+    KS["KafkaSource<br/>(Knative)"]
+    KC1["controladores Knative<br/>eventing + kafka"]
+    RP1[("Redpanda + Redis")]
+    OT1["otel-collector"]
+    ME1 -->|"EnergyMatched<br/>+ heartbeat"| BR
+    GW1 -->|"medidor ajeno"| KS
+    R1P <-->|"topics y libro de órdenes"| RP1
+    R1P -.-> OT1
   end
 
   subgraph R2["Región 2 · nube (AKS)"]
-    ING["Istio ingress<br/>TLS Let's Encrypt"]
-    ING -->|"/mesh/*"| MR["mesh-router<br/>EVENT MESH"]
-    MR --> FAC["facturacion"]
-    MR -.->|"failover"| ME2["matching-engine"]
-    ING -->|"/knative/*<br/>403 sin token"| BRK["Broker declarations"]
-    BRK --> TRG{"Trigger<br/>homeregion=cloud"}
-    TRG --> SNK["KafkaSink"]
-    SNK --> T2[("ingress.declarations")]
-    T2 --> GW2["declaration-gateway"]
-    GW2 --> ME2
-    TRG -.->|"falla"| DLQ[("declaration.dlq")]
+    direction TB
+    ING["Istio ingress<br/>TLS + política de token"]
+    subgraph R2P["Pipeline EDA"]
+      INJ2["injector"] --> GW2["declaration-gateway<br/>KEDA 0..5"]
+      GW2 --> ME2["matching-engine"]
+      PF2["price-feed-simulator"] --> ME2
+      ME2 --> ET2["energy-transfer"]
+    end
+    MR["mesh-router<br/>(Event Mesh)"]
+    FAC["facturacion"]
+    BRK["Broker declarations"]
+    TRG{"Trigger<br/>homeregion = cloud"}
+    SNK["KafkaSink<br/>ingress.declarations"]
+    DLQ["KafkaSink<br/>DLQ"]
+    KC2["controladores Knative<br/>eventing + kafka"]
+    RP2[("Redpanda + Redis")]
+    OT2["otel-collector"]
+    ING -->|"/mesh"| MR
+    ME2 -->|"EnergyMatched"| MR
+    MR --> FAC
+    MR -.->|"failover: posiciones onprem"| ME2
+    ING -->|"/knative"| BRK --> TRG --> SNK --> GW2
+    TRG -.->|"falla"| DLQ
+    R2P <-->|"topics y libro de órdenes"| RP2
+    R2P -.-> OT2
   end
 
   BR ==>|"HTTPS · X-Mesh-Token"| ING
   KS ==>|"HTTPS · CloudEvents · Ce-Meshtoken"| ING
-  R1 & R2 -.->|"OTLP"| AI[("Application Insights")]
+  OT1 -.->|"OTLP"| AI[("Application Insights")]
+  OT2 -.->|"OTLP"| AI
+
+  classDef mesh fill:#E6F1FB,stroke:#185FA5,color:#0C447C
+  classDef kn fill:#E1F5EE,stroke:#0F6E56,color:#085041
+  classDef infra fill:#FAEEDA,stroke:#854F0B,color:#633806
+  class BR,MR,FAC mesh
+  class KS,KC1,KC2,BRK,TRG,SNK,DLQ kn
+  class RP1,RP2,OT1,OT2,AI,ING infra
 ```
+
+Colores: **azul** = Event Mesh (código propio), **verde** = Knative Eventing (configuración), **ámbar** =
+infraestructura compartida (Redpanda + Redis, collector de OTel, ingress, Application Insights), **gris** =
+pipeline EDA (el mismo en ambas regiones).
+
+- Toda la comunicación interna de una región pasa por su Redpanda; el `declaration-gateway` escala con KEDA según
+  el lag del topic de ingesta.
+- Las dos flechas gruesas son los únicos cruces entre regiones; los dos canales entran por el mismo ingress y
+  se separan por ruta.
+- `facturacion` y `mesh-router` solo existen en la nube; `mesh-bridge` y `KafkaSource`, solo en on-prem.
+- Los `controladores Knative` (`eventing-controller`, `kafka-controller`) reconcilian los objetos Knative; no
+  procesan eventos.
 
 | | Event Mesh | Knative |
 |---|---|---|
@@ -174,6 +253,59 @@ Corre una carga a la vez; el Job `lab.ps1 inject` no cambia.
 - `Application Map` muestra la topología `mesh-bridge → mesh-router`.
 
 ## 6. Prueba B: failover (Event Mesh)
+
+### Dónde está el heartbeat
+
+El heartbeat es un latido del `matching-engine` on-prem. El `mesh-router` de la nube lo usa para saber si
+ese engine sigue vivo; si deja de llegar, activa el failover.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant ME as matching-engine (onprem)
+  participant RP as Redpanda onprem<br/>mesh.heartbeat.v1
+  participant BR as mesh-bridge (onprem)
+  participant MR as mesh-router (nube)
+  participant WD as watchdog (en el router)
+
+  loop cada 5 s (HEARTBEAT_INTERVAL)
+    ME->>RP: heartbeat {region, At, LastPositionAt}
+    BR->>RP: consume
+    BR->>MR: POST /mesh/events (HTTPS + token)
+    MR->>MR: onHeartbeat: lastHeartbeat = ahora
+  end
+  loop cada 1 s
+    WD->>MR: ¿ahora - lastHeartbeat > 15 s? (FAILOVER_AFTER)
+  end
+  Note over ME,WD: Si el engine se apaga, los latidos dejan de llegar y el watchdog dispara el failover
+```
+
+```mermaid
+stateDiagram-v2
+  [*] --> NORMAL
+  NORMAL --> FAILOVER_ACTIVE: sin heartbeat de onprem por más de 15 s
+  FAILOVER_ACTIVE --> NORMAL: llega un heartbeat de onprem
+  note right of FAILOVER_ACTIVE
+    El router reenvía posiciones y precios onprem
+    (con replay del buffer reciente) al engine de la nube
+  end note
+```
+
+| Pieza | Dónde | Qué hace |
+|---|---|---|
+| Emisor | `services/cmd/matching-engine/main.go` (`heartbeatLoop`, `heartbeat`) | Publica el latido cada `HEARTBEAT_INTERVAL` (5 s) en `voltera.mesh.heartbeat.v1`, sin traza |
+| Transporte | `services/cmd/mesh-bridge/main.go` | Lee el topic de latidos y lo envía por HTTPS a la nube junto con los demás eventos |
+| Receptor | `services/cmd/mesh-router/main.go` (`onHeartbeat`) | Guarda la hora de llegada; ignora latidos de otra región o con más de 1 min de antigüedad |
+| Vigilante | `services/cmd/mesh-router/main.go` (`watchdog`) | Cada segundo compara con `FAILOVER_AFTER` (15 s) y cambia de estado |
+| Configuración | `deploy/base/kustomization.yaml` (`HEARTBEAT_INTERVAL`, `FAILOVER_AFTER`), `deploy/cloud/mesh.yaml` (`FAILOVER_REGION=onprem`) | Intervalo, umbral y región vigilada |
+
+Cómo verlo en vivo: `lab.ps1 status` muestra en la sección del mesh `state` y `heartbeat_age`
+(normalmente por debajo de 5 s). Los latidos no generan trazas, así que no aparecen en Application Insights.
+
+Dos observaciones, deducidas del código:
+- El latido solo viaja por el Event Mesh, no por Knative. El engine de la nube también emite latidos, pero en
+  la nube no hay `mesh-bridge`, así que nadie los reenvía y el router solo vigila a on-prem.
+- El router no distingue "engine caído" de "enlace o bridge caído": en ambos casos deja de ver latidos.
 
 ```powershell
 .\scripts\lab.ps1 failover-test -N 100

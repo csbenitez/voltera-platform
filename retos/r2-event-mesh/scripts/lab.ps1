@@ -14,7 +14,7 @@
       deploy         Aplica deploy/<onprem|cloud> (kustomize) con el tag construido.
       up             build + secrets + deploy.
       inject         Lanza el Job injector con -N declaraciones a -Rate msg/s.
-      dashboard      Abre el dashboard de carga del injector (port-forward a onprem, http://localhost:8090).
+      dashboard      Abre el dashboard de carga del injector (port-forward a onprem, http://localhost:18090).
       status         Pods, KEDA, lag de Redpanda, estado del Event Mesh y facturación.
       knative-test   Inyecta declaraciones de medidores ajenos (-Foreign) y verifica el cruce onprem -> nube por Knative.
       knative-kql    Imprime las consultas KQL para ver el canal Knative en Application Insights.
@@ -42,6 +42,7 @@ param(
     [int]$N = 100,
     [int]$Rate = 50,
     [double]$Foreign = 0,      # fracción de medidores de la otra región (ruteo Knative)
+    [int]$DashPort = 18090,    # puerto local del dashboard del injector
     [switch]$Knative,          # en addons: instala Knative Eventing
     [string]$Tag = "",
     [string]$TraceId = "",
@@ -292,11 +293,26 @@ function Invoke-Inject {
 }
 
 function Invoke-Dashboard {
-    $port = 8090
+    $port = $DashPort
+    if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
+        throw "El puerto local $port está ocupado. Usa otro: .\scripts\lab.ps1 dashboard -DashPort 18091"
+    }
     K onprem -n $Ns rollout status deploy/injector-dashboard --timeout=120s | Out-Host
     Step "Dashboard del injector -> http://localhost:$port (Ctrl+C para cerrar)"
-    Start-Process "http://localhost:$port"
-    K onprem -n $Ns port-forward svc/injector-dashboard "${port}:80"
+    $pf = Start-Process kubectl -PassThru -NoNewWindow -ArgumentList @("--context", $Ctx["onprem"], "-n", $Ns, "port-forward", "--address", "127.0.0.1", "svc/injector-dashboard", "${port}:80")
+    try {
+        $up = $false
+        for ($i = 0; $i -lt 30 -and -not $pf.HasExited; $i++) {
+            if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) { $up = $true; break }
+            Start-Sleep -Milliseconds 500
+        }
+        if (-not $up) { throw "El port-forward no levantó (kubectl terminó o no escucha en $port). Revisa: kubectl --context $($Ctx['onprem']) -n $Ns get pods -l app=injector-dashboard" }
+        Ok "Listo. Abre http://127.0.0.1:$port"
+        Start-Process "http://127.0.0.1:$port"
+        $pf.WaitForExit()
+    } finally {
+        if (-not $pf.HasExited) { Stop-Process -Id $pf.Id -Force }
+    }
 }
 
 function Show-Status {
@@ -305,8 +321,8 @@ function Show-Status {
         K $t -n $Ns get pods -o wide | Out-Host
         K $t -n $Ns get scaledobject 2>$null | Out-Host
         Info "Consumer groups (Redpanda):"
-        K $t -n $Ns exec redpanda-0 -c redpanda -- rpk group list 2>$null | Out-Host
-        K $t -n $Ns exec redpanda-0 -c redpanda -- rpk group describe declaration-gateway matching-engine 2>$null |
+        K $t -n $Ns exec redpanda-0 -c redpanda '--' rpk group list 2>$null | Out-Host
+        K $t -n $Ns exec redpanda-0 -c redpanda '--' rpk group describe declaration-gateway matching-engine 2>$null |
             Select-String -Pattern "GROUP|TOTAL-LAG|STATE" | Out-Host
         if ($t -eq "cloud") {
             $mesh = Get-SvcJson cloud "mesh-router" "/status"
@@ -319,7 +335,7 @@ function Show-Status {
             K $t -n $Ns get broker, trigger, kafkasink 2>$null | Out-Host
         } else {
             K $t -n $Ns get kafkasource 2>$null | Out-Host
-            K $t -n $Ns exec redpanda-0 -c redpanda -- rpk group describe knative-declaration-forward 2>$null |
+            K $t -n $Ns exec redpanda-0 -c redpanda '--' rpk group describe knative-declaration-forward 2>$null |
                 Select-String -Pattern "GROUP|TOTAL-LAG|STATE" | Out-Host
         }
     }
@@ -415,7 +431,7 @@ union dependencies, requests
 
 function Get-TopicHw([string]$T, [string]$Topic) {
     $hdr = $null; $sum = [long]0
-    foreach ($l in (K $T -n $Ns exec redpanda-0 -c redpanda -- rpk topic describe $Topic -p 2>$null)) {
+    foreach ($l in (K $T -n $Ns exec redpanda-0 -c redpanda '--' rpk topic describe $Topic -p 2>$null)) {
         $f = $l.Trim() -split '\s+'
         if ($f -contains 'HIGH-WATERMARK') { $hdr = [array]::IndexOf($f, 'HIGH-WATERMARK'); continue }
         if ($null -ne $hdr -and $f[0] -match '^\d+$') { $sum += [long]$f[$hdr] }

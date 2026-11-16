@@ -257,8 +257,8 @@ case "$CMD" in
   inject) inject ;;
   dashboard)
     k onprem -n "$NS" rollout status deploy/injector-dashboard --timeout=120s
-    step "Dashboard del injector -> http://localhost:8090 (Ctrl+C para cerrar)"
-    k onprem -n "$NS" port-forward svc/injector-dashboard 8090:80 ;;
+    step "Dashboard del injector -> http://localhost:${DASH_PORT:-18090} (Ctrl+C para cerrar)"
+    k onprem -n "$NS" port-forward svc/injector-dashboard ${DASH_PORT:-18090}:80 ;;
   status) status ;;
   failover-test) failover_test ;;
   knative-test) knative_test ;;
