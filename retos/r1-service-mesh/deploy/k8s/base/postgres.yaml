@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: Secret
+metadata: { name: operator-db }
+type: Opaque
+stringData: { POSTGRES_DB: operator, POSTGRES_USER: operator, POSTGRES_PASSWORD: operator }
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: participant-db }
+type: Opaque
+stringData: { POSTGRES_DB: participants, POSTGRES_USER: participants, POSTGRES_PASSWORD: participants }
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: router-db }
+type: Opaque
+stringData: { POSTGRES_DB: router, POSTGRES_USER: router, POSTGRES_PASSWORD: router }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: operator-db-data }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 256Mi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: participant-db-data }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 256Mi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: router-db-data }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 256Mi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: operator-db }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: operator-db } }
+  template:
+    metadata: { labels: { app: operator-db } }
+    spec:
+      serviceAccountName: operator-db
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ containerPort: 5432 }]
+          envFrom: [{ secretRef: { name: operator-db } }]
+          readinessProbe: { exec: { command: [pg_isready, -U, operator, -d, operator] }, initialDelaySeconds: 2, periodSeconds: 2 }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes: [{ name: data, persistentVolumeClaim: { claimName: operator-db-data } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: operator-db }
+spec: { selector: { app: operator-db }, ports: [{ name: tcp-postgres, port: 5432, targetPort: 5432 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: participant-db }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: participant-db } }
+  template:
+    metadata: { labels: { app: participant-db } }
+    spec:
+      serviceAccountName: participant-db
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ containerPort: 5432 }]
+          envFrom: [{ secretRef: { name: participant-db } }]
+          readinessProbe: { exec: { command: [pg_isready, -U, participants, -d, participants] }, initialDelaySeconds: 2, periodSeconds: 2 }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes: [{ name: data, persistentVolumeClaim: { claimName: participant-db-data } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: participant-db }
+spec: { selector: { app: participant-db }, ports: [{ name: tcp-postgres, port: 5432, targetPort: 5432 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: router-db }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: router-db } }
+  template:
+    metadata: { labels: { app: router-db } }
+    spec:
+      serviceAccountName: router-db
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ containerPort: 5432 }]
+          envFrom: [{ secretRef: { name: router-db } }]
+          readinessProbe: { exec: { command: [pg_isready, -U, router, -d, router] }, initialDelaySeconds: 2, periodSeconds: 2 }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes: [{ name: data, persistentVolumeClaim: { claimName: router-db-data } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: router-db }
+spec: { selector: { app: router-db }, ports: [{ name: tcp-postgres, port: 5432, targetPort: 5432 }] }
