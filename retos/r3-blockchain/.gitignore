@@ -1,0 +1,10 @@
+network/out/
+node_modules/
+contracts-hardhat/artifacts/
+contracts-hardhat/cache/
+services/bin/
+*.db
+
+# Voltera E1
+experimentos/e1-integridad/.datos/
+deployments/e1.json
