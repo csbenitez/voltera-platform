@@ -1,0 +1,215 @@
+{
+  "experimento": "IA-E1 Benchmark RAG Voltera",
+  "fecha_utc": "2026-11-23T19:11:54.722250+00:00",
+  "git_commit": "a7ffb26ff9d5fd66e017123022d2a76a795f17d2",
+  "configuracion": {
+    "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "rrf_k": 60,
+    "preguntas_doradas": 15,
+    "repeticiones_por_pregunta": 5,
+    "top_k_evaluado": 3,
+    "fragmentos_indexados": 84,
+    "nota_latencia": "Modelo calentado previamente. La latencia total incluye embedding y SQL, pero excluye cold start."
+  },
+  "hipotesis": {
+    "H1": "La recuperación híbrida vectorial + léxica mediante RRF obtiene Hit@3 y MRR iguales o superiores a las estrategias individuales, con p95 total inferior a 200 ms.",
+    "H2": "El prefiltrado SQL por NIC evita recuperar documentos contractuales de otros clientes."
+  },
+  "criterios_exito": {
+    "H1": {
+      "hit_at_3_hibrido": ">= mejor estrategia individual",
+      "mrr_hibrido": ">= mejor estrategia individual",
+      "p95_total_ms": "< 200"
+    },
+    "H2": {
+      "fugas_cross_tenant": 0
+    }
+  },
+  "resultados": {
+    "vectorial": {
+      "estrategia": "vectorial",
+      "preguntas": 15,
+      "hit_at_1": {
+        "aciertos": 10,
+        "total": 15,
+        "porcentaje": 66.67
+      },
+      "hit_at_3": {
+        "aciertos": 12,
+        "total": 15,
+        "porcentaje": 80.0
+      },
+      "mrr_at_3": 0.7333,
+      "latencia_embedding_ms": {
+        "mediana": 9.937,
+        "p95": 20.66
+      },
+      "latencia_sql_ms": {
+        "mediana": 1.829,
+        "p95": 45.412
+      },
+      "latencia_total_ms": {
+        "mediana": 15.171,
+        "p95": 56.084
+      },
+      "ranks": [
+        2,
+        null,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        null,
+        null,
+        1,
+        1,
+        1,
+        2
+      ]
+    },
+    "lexico": {
+      "estrategia": "lexico",
+      "preguntas": 15,
+      "hit_at_1": {
+        "aciertos": 11,
+        "total": 15,
+        "porcentaje": 73.33
+      },
+      "hit_at_3": {
+        "aciertos": 14,
+        "total": 15,
+        "porcentaje": 93.33
+      },
+      "mrr_at_3": 0.8333,
+      "latencia_embedding_ms": {
+        "mediana": 0.0,
+        "p95": 0.0
+      },
+      "latencia_sql_ms": {
+        "mediana": 1.806,
+        "p95": 2.664
+      },
+      "latencia_total_ms": {
+        "mediana": 1.84,
+        "p95": 2.719
+      },
+      "ranks": [
+        1,
+        null,
+        1,
+        1,
+        1,
+        2,
+        1,
+        1,
+        1,
+        1,
+        2,
+        1,
+        1,
+        1,
+        2
+      ]
+    },
+    "hibrido_rrf": {
+      "estrategia": "hibrido_rrf",
+      "preguntas": 15,
+      "hit_at_1": {
+        "aciertos": 13,
+        "total": 15,
+        "porcentaje": 86.67
+      },
+      "hit_at_3": {
+        "aciertos": 15,
+        "total": 15,
+        "porcentaje": 100.0
+      },
+      "mrr_at_3": 0.9333,
+      "latencia_embedding_ms": {
+        "mediana": 9.392,
+        "p95": 20.367
+      },
+      "latencia_sql_ms": {
+        "mediana": 43.83,
+        "p95": 49.182
+      },
+      "latencia_total_ms": {
+        "mediana": 52.154,
+        "p95": 71.703
+      },
+      "ranks": [
+        1,
+        2,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2
+      ]
+    }
+  },
+  "aislamiento_multi_tenant": {
+    "escenarios": 6,
+    "fugas": 0,
+    "porcentaje_fugas": 0.0,
+    "detalle": [
+      {
+        "nic_consultado": null,
+        "pregunta": "contrato del titular plan paneles medio de pago",
+        "filtraciones": [],
+        "ok": true
+      },
+      {
+        "nic_consultado": null,
+        "pregunta": "NIC-2001002 José Ángel Núñez contrato",
+        "filtraciones": [],
+        "ok": true
+      },
+      {
+        "nic_consultado": "NIC-2001001",
+        "pregunta": "contrato del titular plan paneles medio de pago",
+        "filtraciones": [],
+        "ok": true
+      },
+      {
+        "nic_consultado": "NIC-2001001",
+        "pregunta": "NIC-2001002 José Ángel Núñez contrato",
+        "filtraciones": [],
+        "ok": true
+      },
+      {
+        "nic_consultado": "NIC-2001003",
+        "pregunta": "contrato del titular plan paneles medio de pago",
+        "filtraciones": [],
+        "ok": true
+      },
+      {
+        "nic_consultado": "NIC-2001003",
+        "pregunta": "NIC-2001002 José Ángel Núñez contrato",
+        "filtraciones": [],
+        "ok": true
+      }
+    ]
+  },
+  "veredicto": {
+    "H1": "VALIDADA",
+    "H2": "VALIDADA",
+    "criterios": {
+      "h1_hit3": true,
+      "h1_mrr": true,
+      "h1_latencia_p95_menor_200ms": true,
+      "h2_cero_fugas_cross_tenant": true
+    }
+  }
+}
